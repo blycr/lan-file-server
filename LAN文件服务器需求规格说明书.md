@@ -4,11 +4,11 @@
 
 |项|内容|
 |---|---|
-|文档版本|V2.1|
-|编制日期|2025-12-29|
+|文档版本|V3.0|
+|编制日期|2025-12-30|
 |适用范围|LAN文件服务器（本地多媒体文件共享）|
 |核心目标|轻量、美观、安全的本地多媒体文件共享服务器，支持全局护眼模式与精准索引|
-|状态|✅ 已完成开发并部署运行|
+|状态|✅ 已完成开发并部署运行（根据实际代码实现修正）|
 
 ## 一、文档概述
 
@@ -165,7 +165,7 @@
 
 ### 6.1 开发语言与框架
 
-- 后端：Python 3.7+，使用Flask框架；
+- 后端：Python 3.7+，使用Python原生http.server + BaseHTTPRequestHandler；
 
 - 前端：原生HTML/CSS/JS（无框架），保证轻量、兼容性；
 
@@ -177,33 +177,39 @@
 
 - 文件索引：递归遍历目录，过滤白名单文件；
 
-- 身份认证：Flask会话管理+PBKDF2哈希；
+- 身份认证：HTTP Basic Auth+PBKDF2哈希+自定义会话管理；
 
-- 服务器：基于Flask的WSGI服务器，支持多线程并发。
+- 服务器：基于Python原生http.server，支持多线程并发；
 
 ### 6.3 文件结构
 
 ```
 lan-file-server/
-├── server.py              # 主服务器文件
-├── config.py              # 配置管理
-├── server_config.ini      # 服务器配置
-├── auth_config.ini        # 认证配置
+├── server.py                        # 主服务器文件
+├── config.py                        # 配置管理
 ├── static/
-│   └── style.css          # 样式文件
-├── .gitignore             # Git忽略文件
-└── lan_file_server.log    # 日志文件
+│   └── style.css                   # 样式文件
+├── 启动LAN文件服务器.bat            # Windows批处理启动脚本
+├── 启动LAN文件服务器.ps1           # PowerShell启动脚本
+├── 创建桌面快捷方式.ps1            # 桌面快捷方式创建脚本
+├── README.md                       # 项目说明文档
+├── LAN文件服务器需求规格说明书.md   # 技术需求文档
+├── 用户需求规格说明书.md           # 用户需求文档
+├── PROJECT_TIMELINE.md            # 项目时间线
+├── project_timeline.txt           # 项目时间线文本版
+├── LICENSE                        # 许可证文件
+└── .gitignore                     # Git忽略文件
 ```
 
 ### 6.4 白名单文件类型
 
-当前支持20种文件类型：
+当前支持17种文件类型：
 
-**图片格式（8种）**：.jpg, .jpeg, .png, .gif, .bmp, .webp, .svg, .ico
+**图片格式（6种）**：.jpg, .jpeg, .png, .gif, .bmp, .webp
 
 **音频格式（6种）**：.wav, .mp3, .ogg, .wma, .m4a, .flac
 
-**视频格式（6种）**：.mp4, .mov, .avi, .mkv, .wmv, .mpeg, .mpg, .webm
+**视频格式（8种）**：.mp4, .mov, .avi, .flv, .mkv, .wmv, .mpeg, .mpg
 
 ## 七、配置要求
 
@@ -336,9 +342,20 @@ lan-file-server/
 
 ### 10.2 启动方式
 
+#### 方式1：直接运行
 ```bash
 cd lan-file-server
 python server.py
+```
+
+#### 方式2：使用Windows批处理脚本
+```bash
+启动LAN文件服务器.bat
+```
+
+#### 方式3：使用PowerShell脚本
+```powershell
+.\启动LAN文件服务器.ps1
 ```
 
 ### 10.3 访问地址
@@ -374,5 +391,6 @@ python server.py
 |V1.0|2025-12-29|初始版本|
 |V2.0|2025-12-29|根据最终实现成果更新需求规格说明书|
 |V2.1|2025-12-29|更新配置部分，新增LOGGING、THEME、CACHING配置节及相关参数|
+|V3.0|2025-12-30|根据实际代码实现修正：更正技术架构为Python原生http.server，修正文件类型支持数量，更新启动方式说明，完善项目结构|
 
 > （注：此文档反映了项目的最终实现状态，所有功能均已验证通过）
