@@ -16,6 +16,21 @@
 .cache/
 .tmp/
 
+# 压缩文件
+*.zip
+*.rar
+*.7z
+*.tar
+*.tar.gz
+*.tgz
+
+# Markdown文档文件（除了README.md）
+*.md
+!README.md
+
+# Wiki目录
+wiki/
+
 # 凭据和密钥文件
 *.key
 *.pem
