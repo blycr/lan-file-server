@@ -1,9 +1,36 @@
 # 配置文件（包含敏感信息）
-auth_config.ini
-server_config.ini
+*.ini
+*.config
+*.conf
+*.cfg
+
+# 备份文件（可能包含敏感信息）
+*.backup
+*.bak
+*.old
+*~
+
+# 临时文件和缓存
+*.tmp
+*.temp
+.cache/
+.tmp/
+
+# 凭据和密钥文件
+*.key
+*.pem
+*.p12
+*.pfx
+*.crt
+*.p8
+secrets/
+credentials/
 
 # 日志文件
 *.log
+*.logs
+log/
+logs/
 
 # Python
 __pycache__/
@@ -51,7 +78,30 @@ coverage.xml
 .hypothesis/
 .pytest_cache/
 
-# Virtual environments
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# IPython
+profile_default/
+ipython_config.py
+
+# pyenv
+.python-version
+
+# pipenv
+Pipfile.lock
+
+# PEP 582
+__pypackages__/
+
+# Celery stuff
+celerybeat-schedule
+celerybeat.pid
+
+# SageMath parsed files
+*.sage.py
+
+# Environments
 .env
 .venv
 env/
@@ -60,24 +110,50 @@ ENV/
 env.bak/
 venv.bak/
 
-# IDE
-.vscode/
+# Spyder project settings
+.spyderproject
+.spyproject
+
+# Rope project settings
+.ropeproject
+
+# mkdocs documentation
+/site
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pyre type checker
+.pyre/
+
+# pytype static type analyzer
+.pytype/
+
+# Cython debug symbols
+cython_debug/
+
+# PyCharm
 .idea/
-*.swp
-*.swo
-*~
 
-# OS
-.DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
+# Visual Studio Code
+.vscode/
+
+# Windows
 Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
 
-# Personal data
-*.personal
-private/
-secrets/
-credentials/
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Linux
+*~
+.fuse_hidden*
+.directory
+.Trash-*
+.nfs*
