@@ -16,27 +16,20 @@ import threading
 import time
 import socket
 import hmac
+from datetime import datetime
 
 from config import get_config_manager
+from color_logger import get_rich_logger
 
 
 # 获取配置管理器实例
 config_manager = get_config_manager()
 
-# 配置日志记录
+# 配置日志记录 - 使用彩色日志系统
 log_level = getattr(logging, config_manager.logging_config['LOG_LEVEL'].upper(), logging.INFO)
-log_file = config_manager.logging_config['LOG_FILE']
 
-logging.basicConfig(
-    level=log_level,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(sys.stdout),
-        logging.FileHandler(log_file, encoding='utf-8')
-    ]
-)
-
-logger = logging.getLogger('LANFileServer')
+# 初始化富文本日志器
+logger = get_rich_logger('LANFileServer', log_level)
 
 
 class AuthenticationManager:
@@ -49,6 +42,9 @@ class AuthenticationManager:
     def verify_credentials(self, username, password):
         """验证用户名和密码
         
+        固定用户名: blycr
+        密码格式: yyyymmddHHMM (基于当前时间)
+        
         Args:
             username (str): 用户名
             password (str): 密码
@@ -56,62 +52,21 @@ class AuthenticationManager:
         Returns:
             bool: 认证是否成功
         """
-        config = self.config_manager
-        
-        # 检查是否有密码哈希
-        if not config.auth_config['password_hash']:
-            return username == config.auth_config['username'] and password == ""
-        
-        # 验证密码
-        stored_hash = config.auth_config['password_hash']
-        salt = config.auth_config['salt']
-        
-        if not salt:
+        # 固定用户名验证
+        if username != "blycr":
             return False
         
-        # 计算输入密码的哈希值
-        password_hash = self._hash_password(password, salt)
+        # 生成基于当前时间的密码 (yyyymmddHHMM格式)
+        current_time = datetime.now()
+        expected_password = current_time.strftime("%Y%m%d%H%M")
         
-        return (username == config.auth_config['username'] and 
-                hmac.compare_digest(password_hash, stored_hash))
-    
-    def _hash_password(self, password, salt):
-        """使用PBKDF2-HMAC-SHA256哈希密码
+        # 信息日志 - 已调整为INFO级别
+        logger.info(f"用户认证尝试 - 用户名: {username}")
+        logger.debug(f"输入密码: {password}")
+        logger.debug(f"预期密码: {expected_password}")
+        logger.debug(f"密码匹配结果: {password == expected_password}")
         
-        Args:
-            password (str): 密码
-            salt (str): 盐值
-            
-        Returns:
-            str: 哈希值（十六进制字符串）
-        """
-        # 使用 PBKDF2-HMAC-SHA256（Python标准库实现）
-        # 格式：salt$iterations$hash
-        iterations = 100000
-        salt_bytes = bytes.fromhex(salt) if len(salt) == 32 else salt.encode('utf-8')
-        password_bytes = password.encode('utf-8')
-        
-        # 使用hashlib.pbkdf2_hmac（Python 3.4+）
-        derived_key = hashlib.pbkdf2_hmac('sha256', password_bytes, salt_bytes, iterations, dklen=32)
-        return derived_key.hex()
-    
-    def create_password_hash(self, password, salt=None):
-        """创建密码哈希
-        
-        Args:
-            password (str): 密码
-            salt (str): 可选的盐值，如果为None则自动生成
-            
-        Returns:
-            tuple: (哈希值, 盐值)
-        """
-        if salt is None:
-            # 生成16字节的随机盐值
-            salt_bytes = secrets.token_bytes(16)
-            salt = salt_bytes.hex()
-        
-        password_hash = self._hash_password(password, salt)
-        return password_hash, salt
+        return password == expected_password
     
     def extract_credentials(self, auth_header):
         """从HTTP Authorization头提取认证信息
@@ -313,7 +268,7 @@ class FileIndexer:
                             name_lower = item_name.lower()
                             file_matches = search_lower in name_lower
                         except Exception as e:
-                            print(f"搜索匹配错误: {e}")
+                            logger.warning(f"搜索匹配错误: {e}")
                             file_matches = False
                     
                     if file_matches:
@@ -330,15 +285,15 @@ class FileIndexer:
                             }
                             index_data['files'].append(file_info)
                         except Exception as e:
-                            print(f"获取文件信息失败: {item} - {e}")
+                            logger.warning(f"获取文件信息失败: {item} - {e}")
                             continue
         
         except PermissionError:
             # 忽略权限错误
-            print(f"权限不足，跳过目录: {dir_path}")
+            logger.warning(f"权限不足，跳过目录: {dir_path}")
             pass
         except Exception as e:
-            print(f"索引目录 {dir_path} 时出错: {e}")
+            logger.error(f"索引目录 {dir_path} 时出错: {e}")
     
     def _index_directory(self, dir_path, relative_path, index_data, search_term):
         """递归索引目录
@@ -352,7 +307,7 @@ class FileIndexer:
         try:
             # 严格检查目录是否在共享目录内
             if not self.config_manager.is_path_safe(str(dir_path), str(self.share_dir)):
-                print(f"跳过目录遍历攻击尝试: {dir_path}")
+                logger.warning(f"跳过目录遍历攻击尝试: {dir_path}")
                 return
             
             for item in dir_path.iterdir():
@@ -360,7 +315,7 @@ class FileIndexer:
                 try:
                     item_name = str(item.name)
                 except UnicodeDecodeError:
-                    print(f"文件名编码错误，跳过: {item}")
+                    logger.warning(f"文件名编码错误，跳过: {item}")
                     continue
                 
                 # 正确构造相对路径：确保与share_dir的关联性
@@ -379,12 +334,12 @@ class FileIndexer:
                             if search_lower not in name_lower:
                                 continue
                     except Exception as e:
-                        print(f"搜索匹配错误: {e}")
+                        logger.warning(f"搜索匹配错误: {e}")
                         continue
                 
                 # 再次检查路径安全性
                 if not self.config_manager.is_path_safe(str(item), str(self.share_dir)):
-                    print(f"跳过不安全的路径: {item}")
+                    logger.warning(f"跳过不安全的路径: {item}")
                     continue
                 
                 if item.is_dir():
@@ -417,15 +372,15 @@ class FileIndexer:
                         }
                         index_data['files'].append(file_info)
                     except Exception as e:
-                        print(f"获取文件信息失败: {item} - {e}")
+                        logger.warning(f"获取文件信息失败: {item} - {e}")
                         continue
         
         except PermissionError:
             # 忽略权限错误
-            print(f"权限不足，跳过目录: {dir_path}")
+            logger.warning(f"权限不足，跳过目录: {dir_path}")
             pass
         except Exception as e:
-            print(f"索引目录 {dir_path} 时出错: {e}")
+            logger.error(f"索引目录 {dir_path} 时出错: {e}")
     
     def get_directory_listing(self, dir_path=""):
         """获取目录列表
@@ -457,7 +412,7 @@ class FileIndexer:
                 try:
                     item_name = str(item.name)
                 except UnicodeDecodeError:
-                    print(f"文件名编码错误，跳过: {item}")
+                    logger.warning(f"文件名编码错误，跳过: {item}")
                     continue
                 
                 # 正确构造路径，确保与当前目录的关联性
@@ -494,7 +449,7 @@ class FileIndexer:
             listing_data['files'].sort(key=lambda x: x['name'].lower())
         
         except Exception as e:
-            print(f"获取目录列表时出错: {e}")
+            logger.error(f"获取目录列表时出错: {e}")
         
         return listing_data
     
@@ -512,11 +467,11 @@ class FileIndexer:
             target_file = self.share_dir / file_path
             
             if not self.config_manager.is_path_safe(str(target_file), str(self.share_dir)):
-                print(f"文件路径不安全: {file_path}")
+                logger.warning(f"文件路径不安全: {file_path}")
                 return None
             
             if not target_file.exists() or not target_file.is_file():
-                print(f"文件不存在或不是文件: {target_file}")
+                logger.warning(f"文件不存在或不是文件: {target_file}")
                 return None
             
             # 获取文件统计信息
@@ -536,11 +491,11 @@ class FileIndexer:
                 'modified_time': stat.st_mtime
             }
             
-            print(f"成功获取文件信息: {file_name}")
+            logger.debug(f"成功获取文件信息: {file_name}")
             return file_info
             
         except Exception as e:
-            print(f"获取文件信息时出错: {file_path} - {e}")
+            logger.error(f"获取文件信息时出错: {file_path} - {e}")
             return None
 
 
@@ -684,16 +639,16 @@ class HTMLTemplate:
     {additional_head}
 </head>
 <body>
-    <header class="header">
+    <header class="header glass-effect">
         <h1 class="title">LAN文件服务器</h1>
         <button id="theme-toggle" class="theme-toggle" onclick="toggleTheme()" title="切换主题">🌙</button>
     </header>
     
-    <main class="main-content">
+    <main class="main-content glass-container">
         {content}
     </main>
     
-    <footer class="footer">
+    <footer class="footer glass-effect">
         <p>&copy; 2025 LAN文件服务器 - 轻量、美观、安全</p>
     </footer>
 </body>
@@ -714,8 +669,8 @@ class HTMLTemplate:
         attempts_html = f'<div class="attempts-info">剩余尝试次数: {remaining_attempts}</div>' if remaining_attempts <= 3 else ""
         
         content = f"""
-        <div class="login-container">
-            <div class="login-card">
+        <div class="login-container glass-effect">
+            <div class="login-card glass-card">
                 <h2>身份认证</h2>
                 {error_html}
                 {attempts_html}
@@ -826,7 +781,7 @@ class HTMLTemplate:
             no_results_html = '<div class="no-results">未找到匹配的内容</div>'
         
         content = f"""
-        <div class="index-container">
+        <div class="index-container glass-effect">
             <div class="header-section">
                 <div class="page-header">
                     <h2>文件浏览器</h2>
@@ -838,7 +793,7 @@ class HTMLTemplate:
                 </div>
             </div>
             
-            <div class="files-content">
+            <div class="files-content glass-card">
                 {stats_html}
                 {directories_html}
                 {files_html}
@@ -959,7 +914,7 @@ class HTMLTemplate:
         """
         
         content = f"""
-        <div class="browse-container">
+        <div class="browse-container glass-effect">
             <div class="header-section">
                 <div class="page-header">
                     <h2>浏览目录</h2>
@@ -972,7 +927,7 @@ class HTMLTemplate:
                 {search_html}
             </div>
             
-            <div class="files-content">
+            <div class="files-content glass-card">
                 {stats_html}
                 {directories_html}
                 {files_html}
@@ -1003,8 +958,8 @@ class HTMLTemplate:
             str: 404页面HTML
         """
         content = """
-        <div class="error-container">
-            <div class="error-card">
+        <div class="error-container glass-effect">
+            <div class="error-card glass-card">
                 <h2>404 - 页面未找到</h2>
                 <p>抱歉，您访问的页面不存在。</p>
                 <div class="error-actions">
@@ -1032,8 +987,8 @@ class HTMLTemplate:
         time_str = f"{minutes}分{seconds}秒" if minutes > 0 else f"{seconds}秒"
         
         content = f"""
-        <div class="error-container">
-            <div class="error-card">
+        <div class="error-container glass-effect">
+            <div class="error-card glass-card">
                 <h2>访问被限制</h2>
                 <p>由于多次认证失败，您的IP地址已被临时封禁。</p>
                 <div class="blocked-info">
@@ -1119,7 +1074,7 @@ class FileServerHandler(BaseHTTPRequestHandler):
                 self._send_html_response(html, 404)
         
         except Exception as e:
-            print(f"处理GET请求时出错: {e}")
+            logger.info(f"处理GET请求时出错: {e}")
             self._send_error_response(500, "服务器内部错误")
     
     def do_POST(self):
@@ -1130,7 +1085,7 @@ class FileServerHandler(BaseHTTPRequestHandler):
             else:
                 self._send_error_response(404, "页面未找到")
         except Exception as e:
-            print(f"处理POST请求时出错: {e}")
+            logger.info(f"处理POST请求时出错: {e}")
             self._send_error_response(500, "服务器内部错误")
     
     def _is_authenticated(self):
@@ -1139,12 +1094,12 @@ class FileServerHandler(BaseHTTPRequestHandler):
         cookie_header = self.headers.get('Cookie', '')
         session_id = self._extract_session_id(cookie_header)
         
-        print(f"DEBUG: Cookie header: {cookie_header}")
-        print(f"DEBUG: Session ID: {session_id}")
+        logger.debug(f"Cookie header: {cookie_header}")
+        logger.debug(f"Session ID: {session_id}")
         
         if session_id:
             is_valid = self.auth_manager.validate_session(session_id)
-            print(f"DEBUG: Session valid: {is_valid}")
+            logger.debug(f"Session valid: {is_valid}")
             if is_valid:
                 return True
         
@@ -1209,7 +1164,7 @@ class FileServerHandler(BaseHTTPRequestHandler):
         try:
             relative_path = unquote(relative_path)
         except Exception as e:
-            print(f"URL解码失败: {e}")
+            logger.warning(f"URL解码失败: {e}")
             html = HTMLTemplate.get_404_page()
             self._send_html_response(html, 404)
             return
@@ -1240,11 +1195,11 @@ class FileServerHandler(BaseHTTPRequestHandler):
         # URL解码处理中文文件名和特殊字符
         try:
             file_path = unquote(file_path, encoding='utf-8', errors='replace')
-            print(f"处理下载请求: {file_path}")
+            logger.info(f"处理下载请求: {file_path}")
             if range_info:
-                print(f"Range请求: {range_info}")
+                logger.info(f"Range请求: {range_info}")
         except Exception as e:
-            print(f"URL解码失败: {e}")
+            logger.warning(f"URL解码失败: {e}")
             html = HTMLTemplate.get_404_page()
             self._send_html_response(html, 404)
             return
@@ -1260,7 +1215,7 @@ class FileServerHandler(BaseHTTPRequestHandler):
         try:
             # 再次检查文件路径安全性
             if not self.config_manager.is_path_safe(file_info['full_path'], str(self.file_indexer.share_dir)):
-                print(f"下载请求路径不安全: {file_info['full_path']}")
+                logger.warning(f"下载请求路径不安全: {file_info['full_path']}")
                 html = HTMLTemplate.get_404_page()
                 self._send_html_response(html, 404)
                 return
@@ -1323,11 +1278,11 @@ class FileServerHandler(BaseHTTPRequestHandler):
             self._send_file_content(file_info['full_path'], range_info)
         
         except FileNotFoundError:
-            print(f"文件未找到: {file_info['full_path']}")
+            logger.warning(f"文件未找到: {file_info['full_path']}")
             html = HTMLTemplate.get_404_page()
             self._send_html_response(html, 404)
         except Exception as e:
-            print(f"发送文件时出错: {e}")
+            logger.info(f"发送文件时出错: {e}")
             self._send_error_response(500, "文件读取错误")
     
     def _send_file_stream(self, file_path):
@@ -1341,7 +1296,7 @@ class FileServerHandler(BaseHTTPRequestHandler):
                     self.wfile.write(chunk)
                     self.wfile.flush()
         except Exception as e:
-            print(f"流式发送文件时出错: {e}")
+            logger.info(f"流式发送文件时出错: {e}")
     
     def _parse_range_header(self, range_header):
         """解析Range请求头
@@ -1432,7 +1387,7 @@ class FileServerHandler(BaseHTTPRequestHandler):
                         content = f.read()
                         self.wfile.write(content)
         except Exception as e:
-            print(f"发送文件内容时出错: {e}")
+            logger.info(f"发送文件内容时出错: {e}")
     
     def _handle_static(self, path):
         """处理静态资源请求"""
@@ -1466,7 +1421,7 @@ class FileServerHandler(BaseHTTPRequestHandler):
             self.wfile.write(content)
             
         except Exception as e:
-            print(f"处理静态文件时出错: {e}")
+            logger.info(f"处理静态文件时出错: {e}")
             self._send_error_response(500, "服务器内部错误")
     
     def _handle_favicon(self):
@@ -1545,7 +1500,7 @@ class FileServerHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(html_content.encode('utf-8'))
         except Exception as e:
-            print(f"发送HTML响应时出错: {e}")
+            logger.info(f"发送HTML响应时出错: {e}")
     
     def _get_content_type(self, file_extension):
         """获取文件MIME类型
@@ -1611,7 +1566,7 @@ class FileServer:
             # 获取有效端口
             port = self.config_manager.get_effective_port()
             if not port:
-                print("无法启动服务器：没有可用端口")
+                logger.error("无法启动服务器：没有可用端口")
                 return False
             
             # 创建服务器
@@ -1627,15 +1582,13 @@ class FileServer:
             logger.info(f"共享目录: {self.config_manager.server_config['SHARE_DIR']}")
             logger.info(f"白名单文件类型: {len(self.config_manager.ALL_WHITELIST_EXTENSIONS)} 种")
             logger.info("按 Ctrl+C 停止服务器")
-            logger.info("=" * 40)
-            
-            print(f"\n=== LAN文件服务器启动成功 ===")
-            print(f"本地访问: http://localhost:{port}")
-            print(f"局域网访问: http://[本机IP]:{port}")
-            print(f"共享目录: {self.config_manager.server_config['SHARE_DIR']}")
-            print(f"白名单文件类型: {len(self.config_manager.ALL_WHITELIST_EXTENSIONS)} 种")
-            print(f"按 Ctrl+C 停止服务器")
-            print("=" * 40)
+            # 使用章节标题样式展示启动信息
+            logger.section("LAN文件服务器启动成功")
+            logger.success(f"本地访问: http://localhost:{port}")
+            logger.success(f"局域网访问: http://[本机IP]:{port}")
+            logger.info(f"共享目录: {self.config_manager.server_config['SHARE_DIR']}")
+            logger.info(f"白名单文件类型: {len(self.config_manager.ALL_WHITELIST_EXTENSIONS)} 种")
+            logger.info("按 Ctrl+C 停止服务器")
             
             # 在新线程中启动服务器
             self.server_thread = threading.Thread(target=self.server.serve_forever, daemon=True)
@@ -1645,19 +1598,18 @@ class FileServer:
         
         except Exception as e:
             logger.error(f"启动服务器时出错: {e}", exc_info=True)
-            print(f"启动服务器时出错: {e}")
             return False
     
     def stop(self):
         """停止服务器"""
         if self.server and self.running:
             logger.info("正在停止服务器...")
-            print("\n正在停止服务器...")
+            logger.info("\n正在停止服务器...")
             self.running = False
             self.server.shutdown()
             self.server.server_close()
             logger.info("服务器已停止")
-            print("服务器已停止")
+            logger.info("服务器已停止")
 
 
 # 全局变量用于信号处理
@@ -1666,7 +1618,7 @@ server_instance = None
 def signal_handler(signum, frame):
     """信号处理器"""
     global server_instance
-    print(f"\n收到信号 {signum}，正在退出...")
+    logger.info(f"\n收到信号 {signum}，正在退出...")
     if server_instance:
         server_instance.stop()
     sys.exit(0)
@@ -1692,10 +1644,10 @@ def main():
                 while server_instance.running:
                     time.sleep(0.1)  # 短暂休眠，减少CPU使用
             except KeyboardInterrupt:
-                print("\n收到中断信号，正在停止服务器...")
+                logger.info("\n收到中断信号，正在停止服务器...")
                 server_instance.stop()
     except Exception as e:
-        print(f"服务器运行出错: {e}")
+        logger.error(f"服务器运行出错: {e}")
         sys.exit(1)
 
 

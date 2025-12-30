@@ -106,5 +106,33 @@ ipython_config.py
 # PyCharm
 .idea/
 
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Personal data
+*.personal
+private/
+secrets/
+credentials/
+
+# Wiki files (GitHub wiki should not be in main repository)
+wiki/
+
+# Backup files
+*.backup
+*.bak
+*~
+
+# Zip files
+*.zip
+*.7z
+*.rar
+
 # PowerShell输出
 *.out

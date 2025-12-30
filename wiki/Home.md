@@ -27,19 +27,10 @@
 - 缓存管理
 - 主题设置
 
-### 🎨 增强日志系统
-- 彩色日志输出，提高可读性
-- 不同日志级别使用不同颜色标识（信息、警告、错误等）
-- 时间戳记录，便于问题追踪
-- 控制台和文件双重输出
-- 丰富的格式化信息，包括模块名和级别
+## 项目文档
 
-### 🖥️ 视觉增强界面
-- ASCII艺术标题和彩色边框
-- Emoji图标增强视觉效果
-- 彩色菜单和状态提示
-- 用户友好的进度反馈
-- 增强的PowerShell启动器界面
+- [用户需求规格说明书](user-requirements): 从用户角度描述的需求文档
+- [技术需求规格说明书](technical-requirements): 从技术实现角度描述的需求文档
 
 ## 快速开始
 
@@ -62,30 +53,6 @@ python server.py
 3. **PowerShell脚本**
 ```powershell
 .\启动LAN文件服务器.ps1
-```
-
-### 首次配置
-
-1. 启动服务器后会提示输入用户名和密码
-2. 配置信息会保存在 `auth_config.ini` 中
-3. 服务器配置保存在 `server_config.ini` 中
-
-## 项目结构
-
-```
-lan-file-server/
-├── server.py                    # 主服务器文件
-├── config.py                    # 配置管理
-├── static/
-│   └── style.css               # 样式文件
-├── auth_config.ini             # 认证配置（已排除）
-├── server_config.ini           # 服务器配置（已排除）
-├── 启动LAN文件服务器.bat       # Windows启动脚本
-├── 启动LAN文件服务器.ps1       # PowerShell启动脚本
-├── README.md                   # 项目说明
-├── LAN文件服务器需求规格说明书.md  # 技术需求文档
-├── 用户需求规格说明书.md          # 用户需求文档
-└── .gitignore                  # Git忽略文件
 ```
 
 ## 配置说明

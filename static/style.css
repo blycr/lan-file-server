@@ -28,7 +28,8 @@
   --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.1);
   --shadow-md: 0 4px 6px rgba(0, 0, 0, 0.1);
   --shadow-lg: 0 10px 15px rgba(0, 0, 0, 0.1);
-}
+  
+  }
 
 /* ==================== 白天模式主题 ==================== */
 .light-theme {
@@ -194,6 +195,10 @@ body {
   gap: var(--spacing-sm);
   max-width: 600px;
   width: 100%;
+      border-radius: var(--border-radius-lg);
+    padding: var(--spacing-sm);
+  box-shadow: var(--shadow-md);
+  transition: all var(--transition-time) ease;
 }
 
 /* ==================== 页面容器 ==================== */
@@ -301,13 +306,14 @@ body {
   padding: var(--spacing-md);
   background: var(--button-bg);
   color: var(--button-text);
-  border: none;
   border-radius: var(--border-radius-sm);
   font-size: var(--font-size-base);
   font-weight: 500;
   cursor: pointer;
   transition: all var(--transition-time) ease;
   margin-top: var(--spacing-md);
+  box-shadow: var(--shadow-sm);
+  border: none;
 }
 
 .login-button:hover {
@@ -340,8 +346,6 @@ body {
   margin-bottom: var(--spacing-md);
   border: 1px solid rgba(255, 193, 7, 0.2);
 }
-
-
 
 /* ==================== 索引工具栏 ==================== */
 .index-toolbar {
@@ -391,7 +395,6 @@ body {
   padding: var(--spacing-md) var(--spacing-lg);
   background: var(--button-bg);
   color: var(--button-text);
-  border: none;
   border-radius: var(--border-radius-md);
   cursor: pointer;
   transition: all var(--transition-time) ease;
@@ -399,6 +402,8 @@ body {
   min-height: 44px;
   font-weight: 500;
   font-size: var(--font-size-base);
+  box-shadow: var(--shadow-sm);
+  border: none;
 }
 
 .search-button:hover {
@@ -639,12 +644,12 @@ body {
 
 .action-button {
   padding: var(--spacing-md) var(--spacing-lg);
-  background: var(--button-bg);
-  color: var(--button-text);
+      color: var(--button-text);
   text-decoration: none;
-  border-radius: var(--border-radius-sm);
+    border-radius: var(--border-radius-sm);
   transition: all var(--transition-time) ease;
   font-weight: 500;
+  box-shadow: var(--shadow-sm);
 }
 
 .action-button:hover {
