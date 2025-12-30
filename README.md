@@ -5,8 +5,8 @@
 ## 功能特性
 
 ### 🔐 安全认证
-- 密码保护访问
-- PBKDF2-HMAC-SHA256密码哈希存储
+- 固定用户名：blycr
+- 时间格式密码（yyyymmddHHMM）
 - 防暴力破解机制（IP封禁）
 - 会话管理
 
@@ -55,37 +55,39 @@ python server.py
 ```
 
 2. **使用启动脚本（Windows）**
-```bash
-启动LAN文件服务器.bat
+```powershell
+.\lan-file-server-launcher.ps1
 ```
 
-3. **PowerShell脚本**
+3. **初始化配置**
 ```powershell
-.\启动LAN文件服务器.ps1
+.\lan-file-server-launcher.ps1 -Initialize
 ```
 
 ### 首次配置
 
-1. 启动服务器后会提示输入用户名和密码
-2. 配置信息会保存在 `auth_config.ini` 中
-3. 服务器配置保存在 `server_config.ini` 中
+1. 运行PowerShell启动脚本：`.lan-file-server-launcher.ps1`
+2. 选择"2. 初始化服务器配置"
+3. 配置用户名和共享目录
+4. 使用当前时间作为密码（例如：202512301310）
+5. 配置信息会保存在 `auth_config.ini` 和 `server_config.ini` 中
 
 ## 项目结构
 
 ```
 lan-file-server/
-├── server.py                    # 主服务器文件
-├── config.py                    # 配置管理
+├── server.py                              # 主服务器文件
+├── color_logger.py                        # 彩色日志系统
+├── config.py                              # 配置管理
 ├── static/
-│   └── style.css               # 样式文件
-├── auth_config.ini             # 认证配置（已排除）
-├── server_config.ini           # 服务器配置（已排除）
-├── 启动LAN文件服务器.bat       # Windows启动脚本
-├── 启动LAN文件服务器.ps1       # PowerShell启动脚本
-├── README.md                   # 项目说明
-├── LAN文件服务器需求规格说明书.md  # 技术需求文档
-├── 用户需求规格说明书.md          # 用户需求文档
-└── .gitignore                  # Git忽略文件
+│   └── style.css                         # 样式文件
+├── auth_config.ini                       # 认证配置（已排除）
+├── server_config.ini                     # 服务器配置（已排除）
+├── lan-file-server-launcher.ps1          # PowerShell启动脚本
+├── lan-file-server-requirements-specification.md  # 需求规格文档
+├── README.md                             # 项目说明
+├── PROJECT_TIMELINE.md                   # 项目时间线
+└── .gitignore                            # Git忽略文件
 ```
 
 ## 配置说明
@@ -111,12 +113,14 @@ search_cache_size = 500
 ### 认证配置 (auth_config.ini)
 ```ini
 [AUTH]
-username = your_username
-password_hash = your_password_hash
-salt = your_salt
+username = blycr
+password_hash =  # 已改为时间格式密码，此字段不再使用
+salt = # 已改为时间格式密码，此字段不再使用
 failed_auth_limit = 5
 failed_auth_block_time = 300
 ```
+
+> **注意**: 当前系统使用固定用户名"blycr"和时间格式密码（yyyymmddHHMM）。例如，如果当前时间是2025年12月30日13:10，则密码是202512301310。
 
 ## 使用说明
 
@@ -156,8 +160,8 @@ failed_auth_block_time = 300
 
 ## 版本信息
 
-- **当前版本**: v1.0.0
-- **发布日期**: 2025-12-29
+- **当前版本**: v1.1.0
+- **发布日期**: 2025-12-30
 - **兼容性**: Python 3.7+
 
 ## 作者
