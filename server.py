@@ -88,7 +88,13 @@ class AuthenticationManager:
         # 使用 PBKDF2-HMAC-SHA256（Python标准库实现）
         # 格式：salt$iterations$hash
         iterations = 100000
-        salt_bytes = bytes.fromhex(salt) if len(salt) == 32 else salt.encode('utf-8')
+        try:
+            # 尝试将盐值作为十六进制字符串解析
+            salt_bytes = bytes.fromhex(salt)
+        except ValueError:
+            # 如果不是有效的十六进制字符串，则将其作为原始字符串处理
+            salt_bytes = salt.encode('utf-8')
+        
         password_bytes = password.encode('utf-8')
         
         # 使用hashlib.pbkdf2_hmac（Python 3.4+）
