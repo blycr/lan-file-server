@@ -845,12 +845,12 @@ function Main {
     Write-Host "║                           📋 请选择操作 📋                             ║" -ForegroundColor Yellow
     Write-Host "╚════════════════════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
     Write-Host ""
-    Write-Host "  🚀 1. 启动服务器" -ForegroundColor Green
-    Write-Host "  ⚙️ 2. 初始化服务器配置" -ForegroundColor Yellow
-    Write-Host "  🖥️ 3. 创建桌面快捷方式" -ForegroundColor Magenta
-    Write-Host "  🛑 4. 强制停止服务器进程" -ForegroundColor Red
-    Write-Host "  📖 5. 显示帮助" -ForegroundColor Cyan
-    Write-Host "  🚪 6. 退出" -ForegroundColor Gray
+    Write-Host "🚀 1. 启动服务器" -ForegroundColor Green
+    Write-Host "⚙️ 2. 初始化服务器配置" -ForegroundColor Yellow
+    Write-Host "🖥️ 3. 创建桌面快捷方式" -ForegroundColor Magenta
+    Write-Host "🛑 4. 强制停止服务器进程" -ForegroundColor Red
+    Write-Host "📖 5. 显示帮助" -ForegroundColor Cyan
+    Write-Host "🚪 6. 退出" -ForegroundColor Gray
     Write-Host ""
     
     $choice = Read-Host "Enter choice (1-6)"
