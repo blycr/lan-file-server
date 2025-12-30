@@ -684,16 +684,16 @@ class HTMLTemplate:
     {additional_head}
 </head>
 <body>
-    <header class="header">
+    <header class="header glass-effect">
         <h1 class="title">LAN文件服务器</h1>
         <button id="theme-toggle" class="theme-toggle" onclick="toggleTheme()" title="切换主题">🌙</button>
     </header>
     
-    <main class="main-content">
+    <main class="main-content glass-container">
         {content}
     </main>
     
-    <footer class="footer">
+    <footer class="footer glass-effect">
         <p>&copy; 2025 LAN文件服务器 - 轻量、美观、安全</p>
     </footer>
 </body>
@@ -714,8 +714,8 @@ class HTMLTemplate:
         attempts_html = f'<div class="attempts-info">剩余尝试次数: {remaining_attempts}</div>' if remaining_attempts <= 3 else ""
         
         content = f"""
-        <div class="login-container">
-            <div class="login-card">
+        <div class="login-container glass-effect">
+            <div class="login-card glass-card">
                 <h2>身份认证</h2>
                 {error_html}
                 {attempts_html}
@@ -826,7 +826,7 @@ class HTMLTemplate:
             no_results_html = '<div class="no-results">未找到匹配的内容</div>'
         
         content = f"""
-        <div class="index-container">
+        <div class="index-container glass-effect">
             <div class="header-section">
                 <div class="page-header">
                     <h2>文件浏览器</h2>
@@ -838,7 +838,7 @@ class HTMLTemplate:
                 </div>
             </div>
             
-            <div class="files-content">
+            <div class="files-content glass-card">
                 {stats_html}
                 {directories_html}
                 {files_html}
@@ -959,7 +959,7 @@ class HTMLTemplate:
         """
         
         content = f"""
-        <div class="browse-container">
+        <div class="browse-container glass-effect">
             <div class="header-section">
                 <div class="page-header">
                     <h2>浏览目录</h2>
@@ -972,7 +972,7 @@ class HTMLTemplate:
                 {search_html}
             </div>
             
-            <div class="files-content">
+            <div class="files-content glass-card">
                 {stats_html}
                 {directories_html}
                 {files_html}
@@ -1003,8 +1003,8 @@ class HTMLTemplate:
             str: 404页面HTML
         """
         content = """
-        <div class="error-container">
-            <div class="error-card">
+        <div class="error-container glass-effect">
+            <div class="error-card glass-card">
                 <h2>404 - 页面未找到</h2>
                 <p>抱歉，您访问的页面不存在。</p>
                 <div class="error-actions">
@@ -1032,8 +1032,8 @@ class HTMLTemplate:
         time_str = f"{minutes}分{seconds}秒" if minutes > 0 else f"{seconds}秒"
         
         content = f"""
-        <div class="error-container">
-            <div class="error-card">
+        <div class="error-container glass-effect">
+            <div class="error-card glass-card">
                 <h2>访问被限制</h2>
                 <p>由于多次认证失败，您的IP地址已被临时封禁。</p>
                 <div class="blocked-info">
