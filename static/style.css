@@ -29,14 +29,7 @@
   --shadow-md: 0 4px 6px rgba(0, 0, 0, 0.1);
   --shadow-lg: 0 10px 15px rgba(0, 0, 0, 0.1);
   
-  /* 毛玻璃效果变量 */
-  --glass-blur: 8px;
-  --glass-saturation: 1.2;
-  --glass-brightness: 1.1;
-  --glass-opacity-light: 0.1;
-  --glass-opacity-medium: 0.2;
-  --glass-opacity-strong: 0.3;
-}
+  }
 
 /* ==================== 白天模式主题 ==================== */
 .light-theme {
@@ -136,38 +129,6 @@ body {
   flex-direction: column;
 }
 
-/* ==================== 毛玻璃效果基础样式 ==================== */
-.glass-effect {
-  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation)) brightness(var(--glass-brightness));
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation)) brightness(var(--glass-brightness));
-  transition: all var(--transition-time) ease;
-  border: 1px solid rgba(255, 255, 255, var(--glass-opacity-light));
-  position: relative;
-}
-
-.glass-effect::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: rgba(255, 255, 255, var(--glass-opacity-light));
-  border-radius: inherit;
-  z-index: -1;
-  transition: all var(--transition-time) ease;
-}
-
-.glass-effect:hover {
-  --glass-blur: 12px;
-  --glass-saturation: 1.3;
-  --glass-brightness: 1.15;
-}
-
-.glass-effect:hover::before {
-  background: rgba(255, 255, 255, var(--glass-opacity-medium));
-}
-
 /* ==================== 头部样式 ==================== */
 .header {
   background-color: var(--header-bg);
@@ -220,41 +181,6 @@ body {
   width: 100%;
 }
 
-/* ==================== 毛玻璃容器样式 ==================== */
-.glass-container {
-  background: rgba(255, 255, 255, var(--glass-opacity-medium));
-  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation)) brightness(var(--glass-brightness));
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation)) brightness(var(--glass-brightness));
-  border-radius: var(--border-radius-lg);
-  border: 1px solid rgba(255, 255, 255, var(--glass-opacity-light));
-  box-shadow: var(--shadow-lg);
-  transition: all var(--transition-time) ease;
-}
-
-.glass-container:hover {
-  background: rgba(255, 255, 255, var(--glass-opacity-strong));
-  transform: translateY(-2px);
-  box-shadow: 0 15px 25px rgba(0, 0, 0, 0.15);
-}
-
-.glass-card {
-  background: rgba(255, 255, 255, var(--glass-opacity-light));
-  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation)) brightness(var(--glass-brightness));
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation)) brightness(var(--glass-brightness));
-  border-radius: var(--border-radius-md);
-  border: 1px solid rgba(255, 255, 255, var(--glass-opacity-light));
-  padding: var(--spacing-lg);
-  margin: var(--spacing-md);
-  box-shadow: var(--shadow-md);
-  transition: all var(--transition-time) ease;
-}
-
-.glass-card:hover {
-  background: rgba(255, 255, 255, var(--glass-opacity-medium));
-  transform: translateY(-1px);
-  box-shadow: var(--shadow-lg);
-}
-
 /* ==================== 搜索区域样式 ==================== */
 .search-section {
   margin-bottom: var(--spacing-xl);
@@ -269,12 +195,8 @@ body {
   gap: var(--spacing-sm);
   max-width: 600px;
   width: 100%;
-  background: rgba(255, 255, 255, var(--glass-opacity-medium));
-  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation)) brightness(var(--glass-brightness));
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation)) brightness(var(--glass-brightness));
-  border-radius: var(--border-radius-lg);
-  border: 1px solid rgba(255, 255, 255, var(--glass-opacity-light));
-  padding: var(--spacing-sm);
+      border-radius: var(--border-radius-lg);
+    padding: var(--spacing-sm);
   box-shadow: var(--shadow-md);
   transition: all var(--transition-time) ease;
 }
@@ -382,11 +304,8 @@ body {
 .login-button {
   width: 100%;
   padding: var(--spacing-md);
-  background: rgba(255, 255, 255, var(--glass-opacity-medium));
-  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation)) brightness(var(--glass-brightness));
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation)) brightness(var(--glass-brightness));
+  background: var(--button-bg);
   color: var(--button-text);
-  border: 1px solid rgba(255, 255, 255, var(--glass-opacity-light));
   border-radius: var(--border-radius-sm);
   font-size: var(--font-size-base);
   font-weight: 500;
@@ -394,6 +313,7 @@ body {
   transition: all var(--transition-time) ease;
   margin-top: var(--spacing-md);
   box-shadow: var(--shadow-sm);
+  border: none;
 }
 
 .login-button:hover {
@@ -426,8 +346,6 @@ body {
   margin-bottom: var(--spacing-md);
   border: 1px solid rgba(255, 193, 7, 0.2);
 }
-
-
 
 /* ==================== 索引工具栏 ==================== */
 .index-toolbar {
@@ -475,11 +393,8 @@ body {
 
 .search-button {
   padding: var(--spacing-md) var(--spacing-lg);
-  background: rgba(255, 255, 255, var(--glass-opacity-medium));
-  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation)) brightness(var(--glass-brightness));
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation)) brightness(var(--glass-brightness));
+  background: var(--button-bg);
   color: var(--button-text);
-  border: 1px solid rgba(255, 255, 255, var(--glass-opacity-light));
   border-radius: var(--border-radius-md);
   cursor: pointer;
   transition: all var(--transition-time) ease;
@@ -488,6 +403,7 @@ body {
   font-weight: 500;
   font-size: var(--font-size-base);
   box-shadow: var(--shadow-sm);
+  border: none;
 }
 
 .search-button:hover {
@@ -728,13 +644,9 @@ body {
 
 .action-button {
   padding: var(--spacing-md) var(--spacing-lg);
-  background: rgba(255, 255, 255, var(--glass-opacity-medium));
-  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation)) brightness(var(--glass-brightness));
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation)) brightness(var(--glass-brightness));
-  color: var(--button-text);
+      color: var(--button-text);
   text-decoration: none;
-  border: 1px solid rgba(255, 255, 255, var(--glass-opacity-light));
-  border-radius: var(--border-radius-sm);
+    border-radius: var(--border-radius-sm);
   transition: all var(--transition-time) ease;
   font-weight: 500;
   box-shadow: var(--shadow-sm);

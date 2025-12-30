@@ -65,7 +65,7 @@ function Initialize-Server {
     
     Write-ColorOutput "This script will help you configure your LAN File Server:" "White"
     Write-ColorOutput "1. Set the shared directory path" "White"
-    Write-ColorOutput "2. Configure user authentication" "White"
+    Write-ColorOutput "2. Configure username (Note: Fixed password is time-based)" "White"
     Write-ColorOutput "3. Validate server functionality" "White"
     Write-Host ""
     
@@ -95,16 +95,16 @@ function Initialize-Server {
     
     Write-ColorOutput "[Success] Valid directory: $validatedPath" "Green"
     
-    # Configure authentication
+    # Configure username
     Write-Host ""
-    Write-ColorOutput "=== Step 2: Configure Authentication ===" "Yellow"
+    Write-ColorOutput "=== Step 2: Configure Username ===" "Yellow"
     
     # Check if auth_config.ini exists, if not create it
     if (-not (Test-Path "auth_config.ini")) {
         Write-ColorOutput "[Info] Creating auth_config.ini..." "Cyan"
         $defaultAuthContent = @"
 [AUTH]
-username = admin
+username = blycr
 password_hash = 
 salt = 
 failed_auth_limit = 5
@@ -114,44 +114,22 @@ failed_auth_block_time = 300
     }
     
     # Get username
-    Write-ColorOutput "Enter username (default: admin):" "White"
+    Write-ColorOutput "Enter username (default: blycr):" "White"
     $username = Read-Host "Username"
     if ([string]::IsNullOrWhiteSpace($username)) {
-        $username = "admin"
+        $username = "blycr"
     }
     
-    # Get password
     Write-Host ""
-    Write-ColorOutput "Enter password for user '$username':" "White"
-    $securePassword = Read-Host "Password" -AsSecureString
-    $passwordPtr = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($securePassword)
-    $password = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto($passwordPtr)
-    [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($passwordPtr)
-    
-    if ([string]::IsNullOrWhiteSpace($password)) {
-        Write-ColorOutput "[Error] Password cannot be empty!" "Red"
-        return
-    }
-    
-    # Generate salt and hash
-    Write-ColorOutput "[Info] Generating password hash..." "Cyan"
-    $salt = Generate-Salt
-    if (-not $salt) {
-        Write-ColorOutput "[Error] Failed to generate salt" "Red"
-        return
-    }
-    
-    $passwordHash = Generate-PasswordHash $password $salt
-    if (-not $passwordHash) {
-        Write-ColorOutput "[Error] Failed to generate password hash" "Red"
-        return
-    }
-    
-    Write-ColorOutput "[Success] Password hash generated" "Green"
+    Write-ColorOutput "=== Step 3: Authentication Information ===" "Yellow"
+    Write-ColorOutput "NOTE: Password authentication has been simplified!" "Cyan"
+    Write-ColorOutput "- Username: $username (can be modified above)" "White"
+    Write-ColorOutput "- Password: Time-based password (current time in yyyymmddHHMM format)" "White"
+    Write-ColorOutput "- Example: If current time is 2025-12-30 13:10, password is: 202512301310" "Gray"
+    Write-Host ""
     
     # Update configuration files
-    Write-Host ""
-    Write-ColorOutput "=== Step 3: Updating Configuration Files ===" "Yellow"
+    Write-ColorOutput "=== Step 4: Updating Configuration Files ===" "Yellow"
     
     # Update server_config.ini
     if (Test-Path "server_config.ini") {
@@ -164,28 +142,16 @@ failed_auth_block_time = 300
         Write-ColorOutput "[Warning] server_config.ini not found, skipping share_dir update" "Yellow"
     }
     
-    # Update auth_config.ini
+    # Update auth_config.ini (username only)
     if (Update-IniFile "auth_config.ini" "AUTH" "username" $username) {
         Write-ColorOutput "[Success] Updated username in auth_config.ini" "Green"
     } else {
         Write-ColorOutput "[Error] Failed to update username in auth_config.ini" "Red"
     }
     
-    if (Update-IniFile "auth_config.ini" "AUTH" "password_hash" $passwordHash) {
-        Write-ColorOutput "[Success] Updated password_hash in auth_config.ini" "Green"
-    } else {
-        Write-ColorOutput "[Error] Failed to update password_hash in auth_config.ini" "Red"
-    }
-    
-    if (Update-IniFile "auth_config.ini" "AUTH" "salt" $salt) {
-        Write-ColorOutput "[Success] Updated salt in auth_config.ini" "Green"
-    } else {
-        Write-ColorOutput "[Error] Failed to update salt in auth_config.ini" "Red"
-    }
-    
     # Test server functionality
     Write-Host ""
-    Write-ColorOutput "=== Step 4: Testing Server Functionality ===" "Yellow"
+    Write-ColorOutput "=== Step 5: Testing Server Functionality ===" "Yellow"
     
     if (Test-ServerFunctionality) {
         Write-ColorOutput "[Success] Server functionality test passed!" "Green"
@@ -198,23 +164,26 @@ failed_auth_block_time = 300
     Write-ColorOutput "=== Initialization Summary ===" "Cyan"
     Write-ColorOutput "Shared Directory: $validatedPath" "White"
     Write-ColorOutput "Username: $username" "White"
-    Write-ColorOutput "Password: [HIDDEN]" "White"
+    Write-ColorOutput "Password: Time-based (yyyymmddHHMM format)" "White"
     Write-Host ""
     Write-ColorOutput "Configuration files have been updated successfully!" "Green"
     Write-Host ""
     Write-ColorOutput "Next steps:" "Yellow"
     Write-ColorOutput "1. Run the server launcher to start the server" "White"
     Write-ColorOutput "2. Access the server at http://localhost:8000" "White"
-    Write-ColorOutput "3. Login with username: $username and your password" "White"
+    Write-ColorOutput "3. Login with username: $username and current time-based password" "White"
+    Write-ColorOutput "4. Current time-based password example: $(Get-Date -Format 'yyyyMMddHHmm')" "Gray"
     Write-Host ""
 }
 
-# Show initialization header
+# Show initialization header with enhanced visual effects
 function Show-InitializationHeader {
     Write-Host ""
-    Write-Host "================================================" -ForegroundColor Cyan
-    Write-Host "        LAN File Server Initialization" -ForegroundColor Yellow
-    Write-Host "================================================" -ForegroundColor Cyan
+    Write-Host "╔════════════════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
+    Write-Host "║                                                                        ║" -ForegroundColor Cyan
+    Write-Host "║                    ⚙️ 服务器配置初始化 ⚙️                              ║" -ForegroundColor Yellow
+    Write-Host "║                                                                        ║" -ForegroundColor Cyan
+    Write-Host "╚════════════════════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
     Write-Host ""
 }
 
@@ -226,23 +195,27 @@ function Generate-PasswordHash {
     )
     
     try {
-        # Import required .NET libraries for cryptography
-        Add-Type -AssemblyName System.Security.Cryptography
+        # Import required .NET libraries for cryptography - use correct assembly
+        Add-Type -AssemblyName System.Core
         
-        # Convert salt from hex string to bytes
-        $saltBytes = [System.Convert]::FromHexString($Salt)
+        # Convert salt from hex string to bytes - manual conversion for compatibility
+        $saltBytes = New-Object byte[] ($Salt.Length / 2)
+        for ($i = 0; $i -lt $Salt.Length; $i += 2) {
+            $saltBytes[$i/2] = [Convert]::ToByte($Salt.Substring($i, 2), 16)
+        }
+        
+        # Ensure password is properly encoded as UTF-8 - Match Python exactly
         $passwordBytes = [System.Text.Encoding]::UTF8.GetBytes($Password)
         
         # Use PBKDF2-HMAC-SHA256 with 100,000 iterations (matching server)
         $iterations = 100000
+        
+        # Use PBKDF2-HMAC-SHA256 with exact parameters matching Python's hashlib.pbkdf2_hmac
         $derivedKey = [System.Security.Cryptography.Rfc2898DeriveBytes]::new($passwordBytes, $saltBytes, $iterations)
         $hashBytes = $derivedKey.GetBytes(32)  # 32 bytes = 256 bits
         
-        # Convert to hex string
-        $hashString = ""
-        foreach ($byte in $hashBytes) {
-            $hashString += $byte.ToString("x2")
-        }
+        # Convert to hex string with consistent formatting
+        $hashString = -join ($hashBytes | ForEach-Object { $_.ToString("x2") })
         
         return $hashString
     } catch {
@@ -406,32 +379,71 @@ function Test-ServerFunctionality {
 # Show help information
 function Show-Help {
     Write-Host ""
-    Write-Host "================================================" -ForegroundColor Cyan
-    Write-Host "            LAN File Server Launcher" -ForegroundColor Yellow
-    Write-Host "================================================" -ForegroundColor Cyan
+    Write-Host "═══════════════════════════════════════════════════════════════════════════════" -ForegroundColor DarkCyan
+    Write-Host "                                  .:-=+*%@@@@@%*+=-:. " -ForegroundColor Yellow
+    Write-Host "                              :=*%@@@@@@@@@@@@@@@@@@@%*+=: " -ForegroundColor Yellow
+    Write-Host "                          :=*%@@@@@@@@@@@@@@@@@@@@@@@@@@@@@%*+=: " -ForegroundColor Yellow
+    Write-Host "                        =%@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@% " -ForegroundColor Yellow
+    Write-Host "                       %@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@% " -ForegroundColor Yellow
+    Write-Host "                      #@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@# " -ForegroundColor Yellow
+    Write-Host "                     @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ " -ForegroundColor Yellow
+    Write-Host "                    &@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@& " -ForegroundColor Yellow
+    Write-Host "                   #@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@# " -ForegroundColor Yellow
+    Write-Host "                   %@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@% " -ForegroundColor Yellow
+    Write-Host "                   @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ " -ForegroundColor Yellow
+    Write-Host "                   #@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@# " -ForegroundColor Yellow
+    Write-Host "                    &@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@& " -ForegroundColor Yellow
+    Write-Host "                     @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ " -ForegroundColor Yellow
+    Write-Host "                      #@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@# " -ForegroundColor Yellow
+    Write-Host "                       %@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@% " -ForegroundColor Yellow
+    Write-Host "                        =%@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@% " -ForegroundColor Yellow
+    Write-Host "                          :=*%@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@%*+=: " -ForegroundColor Yellow
+    Write-Host "                              :=*%@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@%*+=: " -ForegroundColor Yellow
+    Write-Host "                                  .:-=+*%@@@@@@@@@@@@@@@@@@@%*+=-:. " -ForegroundColor Yellow
+    Write-Host "═══════════════════════════════════════════════════════════════════════════════" -ForegroundColor DarkCyan
     Write-Host ""
-    Write-Host "Usage:" -ForegroundColor White
-    Write-Host "  .\lan-file-server-launcher.ps1              # Start server" -ForegroundColor Gray
-    Write-Host "  .\lan-file-server-launcher.ps1 -Initialize   # Initialize server configuration" -ForegroundColor Gray
-    Write-Host "  .\lan-file-server-launcher.ps1 -CreateShortcut # Create desktop shortcut" -ForegroundColor Gray
-    Write-Host "  .\lan-file-server-launcher.ps1 -Help        # Show this help" -ForegroundColor Gray
+    Write-Host "                              🎨  LAN 文件服务器启动器  🎨" -ForegroundColor Cyan
     Write-Host ""
-    Write-Host "Requirements:" -ForegroundColor White
-    Write-Host "  - Python 3.x installed and added to PATH" -ForegroundColor Gray
-    Write-Host "  - PowerShell 5.0+ or CMD" -ForegroundColor Gray
+    Write-Host "═══════════════════════════════════════════════════════════════════════════════" -ForegroundColor DarkCyan
     Write-Host ""
-    Write-Host "Supported OS:" -ForegroundColor White
+    Write-Host "用法:" -ForegroundColor White
+    Write-Host "  .\lan-file-server-launcher.ps1              # 启动服务器" -ForegroundColor Gray
+    Write-Host "  .\lan-file-server-launcher.ps1 -Initialize   # 初始化服务器配置" -ForegroundColor Gray
+    Write-Host "  .\lan-file-server-launcher.ps1 -CreateShortcut # 创建桌面快捷方式" -ForegroundColor Gray
+    Write-Host "  .\lan-file-server-launcher.ps1 -Help        # 显示此帮助" -ForegroundColor Gray
+    Write-Host ""
+    Write-Host "主菜单选项:" -ForegroundColor White
+    Write-Host "  1. 启动服务器" -ForegroundColor Green
+    Write-Host "  2. 初始化服务器配置" -ForegroundColor Yellow
+    Write-Host "  3. 创建桌面快捷方式" -ForegroundColor Yellow
+    Write-Host "  4. 强制停止服务器进程" -ForegroundColor Red
+    Write-Host "  5. 显示帮助" -ForegroundColor Gray
+    Write-Host "  6. 退出" -ForegroundColor Gray
+    Write-Host ""
+    Write-Host "认证信息:" -ForegroundColor White
+    Write-Host "  用户名: blycr (可配置)" -ForegroundColor Gray
+    Write-Host "  密码: 基于时间 (yyyymmddHHMM 格式)" -ForegroundColor Gray
+    Write-Host ""
+    Write-Host "系统要求:" -ForegroundColor White
+    Write-Host "  - Python 3.x 已安装并添加到 PATH" -ForegroundColor Gray
+    Write-Host "  - PowerShell 5.0+ 或 CMD" -ForegroundColor Gray
+    Write-Host ""
+    Write-Host "支持的系统:" -ForegroundColor White
     Write-Host "  - Windows 10/11" -ForegroundColor Gray
     Write-Host "  - Windows Server 2016+" -ForegroundColor Gray
     Write-Host ""
+    Write-Host "═══════════════════════════════════════════════════════════════════════════════" -ForegroundColor DarkCyan
+    Write-Host ""
 }
 
-# Create desktop shortcut
+# Create desktop shortcut with enhanced visual effects
 function Create-DesktopShortcut {
     Write-Host ""
-    Write-Host "================================================" -ForegroundColor Cyan
-    Write-Host "        Create Desktop Shortcut" -ForegroundColor Yellow
-    Write-Host "================================================" -ForegroundColor Cyan
+    Write-Host "╔════════════════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
+    Write-Host "║                                                                        ║" -ForegroundColor Cyan
+    Write-Host "║                   🖥️ 创建桌面快捷方式 🖥️                             ║" -ForegroundColor Yellow
+    Write-Host "║                                                                        ║" -ForegroundColor Cyan
+    Write-Host "╚════════════════════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
     Write-Host ""
     
     # Get current script path
@@ -571,10 +583,25 @@ function Test-Configuration {
     }
 }
 
-# Start server
+# Start server with enhanced visual effects
 function Start-Server {
     Write-Host ""
-    Write-ColorOutput "[Info] Starting LAN File Server..." "Cyan"
+    Write-Host "╔════════════════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
+    Write-Host "║                                                                        ║" -ForegroundColor Cyan
+    Write-Host "║                      🚀 启动 LAN 文件服务器 🚀                        ║" -ForegroundColor Green
+    Write-Host "║                                                                        ║" -ForegroundColor Cyan
+    Write-Host "╚════════════════════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
+    Write-Host ""
+    
+    Write-ColorOutput "⚡ 启动中..." "Yellow"
+    Write-ColorOutput "按 Ctrl+C 停止服务器并返回菜单" "Magenta"
+    Write-Host ""
+    
+    # Add note about the enhanced logging system
+    Write-Host "🔍 增强日志系统:" -ForegroundColor Cyan
+    Write-Host "  ✨ 彩色日志消息，提高可见性" -ForegroundColor White
+    Write-Host "  🎨 不同日志级别使用不同颜色（信息、警告、错误）" -ForegroundColor White
+    Write-Host "  ⏰ 时间戳记录，便于问题追踪" -ForegroundColor White
     Write-Host ""
     
     try {
@@ -595,8 +622,172 @@ function Start-Server {
         Write-ColorOutput "  4. Check server.py for syntax errors" "White"
     } finally {
         Write-Host ""
-        Write-ColorOutput "Server stopped" "Gray"
+        Write-ColorOutput "Server stopped. Returning to main menu..." "Green"
         Write-Host ""
+    }
+}
+
+# Force stop server processes with enhanced visual effects
+function Force-Stop-Server {
+    Write-Host ""
+    Write-Host "╔════════════════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
+    Write-Host "║                                                                        ║" -ForegroundColor Cyan
+    Write-Host "║                    🛑 强制停止服务器进程 🛑                             ║" -ForegroundColor Red
+    Write-Host "║                                                                        ║" -ForegroundColor Cyan
+    Write-Host "╚════════════════════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
+    Write-Host ""
+    
+    # Get all Python processes
+    $pythonProcesses = Get-Process python -ErrorAction SilentlyContinue | Where-Object {
+        $_.CommandLine -like "*server.py*" -or $_.CommandLine -like "*lan-file-server*"
+    }
+    
+    if ($pythonProcesses.Count -eq 0) {
+        Write-ColorOutput "[Info] No server processes found running." "Green"
+        Write-ColorOutput "All server processes are already stopped." "Green"
+        return
+    }
+    
+    Write-ColorOutput "Found $($pythonProcesses.Count) server process(es):" "Yellow"
+    Write-Host ""
+    
+    $processList = @()
+    $index = 1
+    
+    foreach ($process in $pythonProcesses) {
+        $processInfo = [PSCustomObject]@{
+            Index = $index
+            PID = $process.Id
+            ProcessName = $process.ProcessName
+            StartTime = $process.StartTime
+            CPU = [math]::Round($process.CPU, 2)
+            WorkingSet = [math]::Round($process.WorkingSet64 / 1MB, 2)
+            CommandLine = $process.CommandLine
+            Process = $process
+        }
+        $processList += $processInfo
+        
+        Write-ColorOutput "[$index] PID: $($process.Id)" "White"
+        Write-ColorOutput "    Process Name: $($process.ProcessName)" "White"
+        Write-ColorOutput "    Start Time: $($process.StartTime)" "White"
+        Write-ColorOutput "    CPU Usage: $([math]::Round($process.CPU, 2))s" "White"
+        Write-ColorOutput "    Memory Usage: $([math]::Round($process.WorkingSet64 / 1MB, 2))MB" "White"
+        Write-Host ""
+        
+        $index++
+    }
+    
+    Write-Host ""
+    Write-ColorOutput "Choose action:" "Yellow"
+    Write-ColorOutput "  1-$($pythonProcesses.Count). Stop specific process" "White"
+    Write-ColorOutput "  A. Stop ALL server processes" "Red"
+    Write-ColorOutput "  Q. Quit (do nothing)" "Gray"
+    Write-Host ""
+    
+    $choice = Read-Host "Enter your choice"
+    
+    switch ($choice.ToUpper()) {
+        { $_ -match "^[1-9]$" } {
+            $processIndex = [int]$choice
+            if ($processIndex -ge 1 -and $processIndex -le $processList.Count) {
+                $selectedProcess = $processList[$processIndex - 1]
+                Stop-Specific-Process $selectedProcess
+            } else {
+                Write-ColorOutput "[Error] Invalid process number!" "Red"
+            }
+        }
+        "A" {
+            Write-Host ""
+            Write-ColorOutput "WARNING: This will stop ALL server processes!" "Red"
+            $confirm = Read-Host "Are you sure? (Y/N)"
+            if ($confirm -eq "Y" -or $confirm -eq "y") {
+                Stop-All-Server-Processes $processList
+            } else {
+                Write-ColorOutput "Operation cancelled." "Yellow"
+            }
+        }
+        "Q" {
+            Write-ColorOutput "Operation cancelled." "Yellow"
+        }
+        default {
+            Write-ColorOutput "[Error] Invalid choice!" "Red"
+        }
+    }
+}
+
+# Stop specific process
+function Stop-Specific-Process {
+    param($processInfo)
+    
+    Write-Host ""
+    Write-ColorOutput "Stopping process PID: $($processInfo.PID)" "Yellow"
+    
+    try {
+        # First try graceful shutdown
+        $processInfo.Process.CloseMainWindow()
+        Start-Sleep -Seconds 2
+        
+        # Check if process is still running
+        if (Get-Process -Id $processInfo.PID -ErrorAction SilentlyContinue) {
+            Write-ColorOutput "Process did not close gracefully. Forcing termination..." "Red"
+            $processInfo.Process.Kill()
+            Start-Sleep -Seconds 1
+        }
+        
+        # Verify process is stopped
+        if (-not (Get-Process -Id $processInfo.PID -ErrorAction SilentlyContinue)) {
+            Write-ColorOutput "[Success] Process PID $($processInfo.PID) has been stopped!" "Green"
+        } else {
+            Write-ColorOutput "[Error] Failed to stop process PID $($processInfo.PID)" "Red"
+        }
+    } catch {
+        Write-ColorOutput "[Error] Failed to stop process: $($_.Exception.Message)" "Red"
+    }
+}
+
+# Stop all server processes
+function Stop-All-Server-Processes {
+    param($processList)
+    
+    Write-Host ""
+    Write-ColorOutput "Stopping all server processes..." "Yellow"
+    
+    $successCount = 0
+    $failCount = 0
+    
+    foreach ($processInfo in $processList) {
+        try {
+            Write-ColorOutput "Stopping PID: $($processInfo.PID)" "Cyan"
+            
+            # First try graceful shutdown
+            $processInfo.Process.CloseMainWindow()
+            Start-Sleep -Seconds 2
+            
+            # Check if process is still running
+            if (Get-Process -Id $processInfo.PID -ErrorAction SilentlyContinue) {
+                $processInfo.Process.Kill()
+                Start-Sleep -Seconds 1
+            }
+            
+            # Verify process is stopped
+            if (-not (Get-Process -Id $processInfo.PID -ErrorAction SilentlyContinue)) {
+                Write-ColorOutput "[Success] PID $($processInfo.PID) stopped!" "Green"
+                $successCount++
+            } else {
+                Write-ColorOutput "[Error] Failed to stop PID $($processInfo.PID)" "Red"
+                $failCount++
+            }
+        } catch {
+            Write-ColorOutput "[Error] Failed to stop PID $($processInfo.PID): $($_.Exception.Message)" "Red"
+            $failCount++
+        }
+    }
+    
+    Write-Host ""
+    Write-ColorOutput "=== Stop Summary ===" "Cyan"
+    Write-ColorOutput "Successfully stopped: $successCount process(es)" "Green"
+    if ($failCount -gt 0) {
+        Write-ColorOutput "Failed to stop: $failCount process(es)" "Red"
     }
 }
 
@@ -622,11 +813,15 @@ function Main {
         return
     }
     
-    # Show startup interface
+    # Show startup interface with enhanced visual effects
     Write-Host ""
-    Write-Host "================================================" -ForegroundColor Cyan
-    Write-Host "          LAN File Server Launcher" -ForegroundColor Yellow
-    Write-Host "================================================" -ForegroundColor Cyan
+    Write-Host "╔════════════════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
+    Write-Host "║                                                                        ║" -ForegroundColor Cyan
+    Write-Host "║                    🎨 LAN 文件服务器启动器 🎨                           ║" -ForegroundColor Yellow
+    Write-Host "║                                                                        ║" -ForegroundColor Cyan
+    Write-Host "║                         🌐 局域网文件共享服务 🌐                       ║" -ForegroundColor Magenta
+    Write-Host "║                                                                        ║" -ForegroundColor Cyan
+    Write-Host "╚════════════════════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
     Write-Host ""
     
     # Run checks
@@ -644,47 +839,73 @@ function Main {
     
     Test-Configuration
     
-    # Offer options
+    # Offer options with enhanced visual effects
     Write-Host ""
-    Write-ColorOutput "Choose action:" "Yellow"
-    Write-ColorOutput "  1. Start server" "White"
-    Write-ColorOutput "  2. Initialize server configuration" "White"
-    Write-ColorOutput "  3. Create desktop shortcut" "White"
-    Write-ColorOutput "  4. Show help" "White"
-    Write-ColorOutput "  5. Exit" "White"
+    Write-Host "╔════════════════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
+    Write-Host "║                           📋 请选择操作 📋                             ║" -ForegroundColor Yellow
+    Write-Host "╚════════════════════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
+    Write-Host ""
+    Write-Host "  🚀 1. 启动服务器" -ForegroundColor Green
+    Write-Host "  ⚙️ 2. 初始化服务器配置" -ForegroundColor Yellow
+    Write-Host "  🖥️ 3. 创建桌面快捷方式" -ForegroundColor Magenta
+    Write-Host "  🛑 4. 强制停止服务器进程" -ForegroundColor Red
+    Write-Host "  📖 5. 显示帮助" -ForegroundColor Cyan
+    Write-Host "  🚪 6. 退出" -ForegroundColor Gray
     Write-Host ""
     
-    $choice = Read-Host "Enter choice (1-5)"
+    $choice = Read-Host "Enter choice (1-6)"
     
     switch ($choice) {
         "1" {
+            Write-Host "🚀 正在启动服务器..." -ForegroundColor Green
             Start-Server
             Write-Host ""
-            Read-Host "Press any key to exit"
+            Write-Host "✅ 服务器已停止，返回主菜单" -ForegroundColor Green
+            Write-Host ""
+            Write-Host "👆 按任意键返回主菜单..." -ForegroundColor Yellow
+            $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
         }
         "2" {
+            Write-Host "⚙️ 正在初始化服务器配置..." -ForegroundColor Yellow
             Initialize-Server
             Write-Host ""
-            Read-Host "Press any key to exit"
+            Write-Host "📋 配置完成，按任意键退出..." -ForegroundColor Cyan
+            Read-Host
         }
         "3" {
+            Write-Host "🖥️ 正在创建桌面快捷方式..." -ForegroundColor Magenta
             Create-DesktopShortcut
             Write-Host ""
-            Read-Host "Press any key to exit"
+            Write-Host "📋 创建完成，按任意键退出..." -ForegroundColor Cyan
+            Read-Host
         }
         "4" {
-            Show-Help
+            Write-Host "🛑 正在检查服务器进程..." -ForegroundColor Red
+            Force-Stop-Server
             Write-Host ""
-            Read-Host "Press any key to exit"
+            Write-Host "📋 操作完成，按任意键返回菜单..." -ForegroundColor Cyan
+            Read-Host
         }
         "5" {
-            Write-ColorOutput "Exiting..." "Gray"
+            Write-Host "📖 正在显示帮助信息..." -ForegroundColor Cyan
+            Show-Help
+            Write-Host ""
+            Write-Host "📋 帮助显示完成，按任意键退出..." -ForegroundColor Cyan
+            Read-Host
+        }
+        "6" {
+            Write-Host "🚪 正在退出..." -ForegroundColor Gray
+            Write-Host "👋 感谢使用 LAN 文件服务器!" -ForegroundColor Cyan
+            Write-Host ""
         }
         default {
-            Write-ColorOutput "Invalid choice, starting server..." "Yellow"
+            Write-Host "⚠️ 无效选择，默认启动服务器..." -ForegroundColor Yellow
             Start-Server
             Write-Host ""
-            Read-Host "Press any key to exit"
+            Write-Host "✅ 服务器已停止，返回主菜单" -ForegroundColor Green
+            Write-Host ""
+            Write-Host "👆 按任意键返回主菜单..." -ForegroundColor Yellow
+            $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
         }
     }
 }

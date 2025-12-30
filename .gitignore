@@ -81,3 +81,19 @@ Thumbs.db
 private/
 secrets/
 credentials/
+
+# Wiki files (GitHub wiki should not be in main repository)
+wiki/
+
+# Backup files
+*.backup
+*.bak
+*~
+
+# Zip files
+*.zip
+*.7z
+*.rar
+
+# PowerShell output
+*.out
