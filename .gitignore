@@ -30,9 +30,6 @@ sessions.json
 *.md
 !README.md
 
-# Wiki目录
-wiki/
-
 # 凭据和密钥文件
 *.key
 *.pem
@@ -125,3 +122,6 @@ credentials/
 
 # PowerShell输出
 *.out
+
+# 无关脚本
+update_wiki.py
