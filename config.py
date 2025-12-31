@@ -5,26 +5,33 @@ import socket
 import platform
 import uuid
 import time
+import json
+import threading
 from pathlib import Path
+from watchdog.observers import Observer
+from watchdog.events import FileSystemEventHandler
 
 
 class ConfigManager:
     """配置管理器 - 处理服务器配置、认证配置和白名单文件类型"""
     
     # 常量定义
-    SESSION_EXPIRE_TIME = 24 * 3600  # 会话过期时间（秒）
+    SESSION_EXPIRE_TIME = 24 * 3600  # 会话过期时间（秒） - 保留向后兼容，实际使用配置中的SESSION_TIMEOUT
     
-    # 白名单文件扩展名
-    WHITELIST_EXTENSIONS = {
-        'image': ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp'],
-        'audio': ['.wav', '.mp3', '.ogg', '.wma', '.m4a', '.flac'],
-        'video': ['.mp4', '.mov', '.avi', '.flv', '.mkv', '.wmv', '.mpeg', '.mpg']
-    }
-    
-    # 所有白名单扩展名的集合（用于快速检查）
-    ALL_WHITELIST_EXTENSIONS = set()
-    for ext_list in WHITELIST_EXTENSIONS.values():
-        ALL_WHITELIST_EXTENSIONS.update(ext_list)
+    class ConfigFileHandler(FileSystemEventHandler):
+        """配置文件变更处理器"""
+        def __init__(self, config_manager):
+            self.config_manager = config_manager
+        
+        def on_modified(self, event):
+            """处理文件修改事件"""
+            if Path(event.src_path) == self.config_manager.json_config_file:
+                print(f"\n📝 检测到配置文件 {event.src_path} 变更，正在重载配置...")
+                try:
+                    self.config_manager._load_json_config()
+                    print(f"✅ 配置文件重载成功")
+                except Exception as e:
+                    print(f"❌ 配置文件重载失败: {e}")
     
     def __init__(self, config_dir="."):
         """初始化配置管理器
@@ -35,6 +42,7 @@ class ConfigManager:
         self.config_dir = Path(config_dir)
         self.server_config_file = self.config_dir / "server_config.ini"
         self.auth_config_file = self.config_dir / "auth_config.ini"
+        self.json_config_file = self.config_dir / "config.json"  # 新增JSON配置文件
         
         # 默认服务器配置
         self.server_config = {
@@ -44,7 +52,8 @@ class ConfigManager:
             'SSL_CERT_FILE': '',
             'SSL_KEY_FILE': '',
             'FAILED_AUTH_LIMIT': 5,
-            'FAILED_AUTH_BLOCK_TIME': 300
+            'FAILED_AUTH_BLOCK_TIME': 300,
+            'SESSION_TIMEOUT': 24 * 3600  # 新增会话超时配置
         }
         
         # 默认日志配置
@@ -62,7 +71,10 @@ class ConfigManager:
         self.caching_config = {
             'INDEX_CACHE_SIZE': 1000,
             'SEARCH_CACHE_SIZE': 500,
-            'UPDATE_INTERVAL': 300
+            'UPDATE_INTERVAL': 300,
+            'ENABLE_MULTI_LEVEL_CACHE': True,
+            'MEMORY_CACHE_SIZE': 100,  # 内存缓存大小
+            'DISK_CACHE_ENABLED': False  # 是否启用磁盘缓存
         }
         
         # 默认认证配置
@@ -74,17 +86,61 @@ class ConfigManager:
             'failed_auth_block_time': 300
         }
         
+        # 白名单配置
+        self.whitelist_config = {
+            'image': ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp'],
+            'audio': ['.wav', '.mp3', '.ogg', '.wma', '.m4a', '.flac'],
+            'video': ['.mp4', '.mov', '.avi', '.flv', '.mkv', '.wmv', '.mpeg', '.mpg']
+        }
+        
+        # 所有白名单扩展名的集合（用于快速检查）
+        self.ALL_WHITELIST_EXTENSIONS = set()
+        for ext_list in self.whitelist_config.values():
+            self.ALL_WHITELIST_EXTENSIONS.update(ext_list)
+        
         # IP封禁记录
         self.failed_attempts = {}  # {'ip': {'count': int, 'last_attempt': timestamp}}
         
         # Session存储 - 在所有实例间共享
-        self.sessions = {}  # 存储活跃会话：session_id -> {username, created_at, last_access}
+        self.sessions = {}  # 存储活跃会话：session_id -> {username, created_at, last_access, device_info, media_active}
+        
+        # 会话持久化相关
+        self.session_file = self.config_dir / "sessions.json"
+        
+        # 配置热重载相关
+        self.observer = None
+        self.config_handler = None
         
         # 确保配置目录存在
         self.config_dir.mkdir(exist_ok=True)
         
         # 加载配置
         self._load_or_create_config()
+        
+        # 加载持久化会话
+        self._load_sessions()
+        
+        # 启动配置热重载
+        self._start_config_watch()
+        
+        # 启动会话清理线程
+        self._start_session_cleanup_thread()
+        
+    def _start_config_watch(self):
+        """启动配置文件监控"""
+        self.config_handler = self.ConfigFileHandler(self)
+        self.observer = Observer()
+        self.observer.schedule(self.config_handler, str(self.config_dir), recursive=False)
+        self.observer.start()
+        print(f"🔍 已启动配置文件监控，监控目录: {self.config_dir}")
+    
+    def _stop_config_watch(self):
+        """停止配置文件监控"""
+        if self.observer:
+            self.observer.stop()
+            self.observer.join()
+            self.observer = None
+            print(f"🛑 已停止配置文件监控")
     
     def _get_default_share_dir(self):
         """获取默认共享目录"""
@@ -95,19 +151,147 @@ class ConfigManager:
     
     def _load_or_create_config(self):
         """加载或创建配置文件"""
-        # 检查并创建服务器配置
-        if not self.server_config_file.exists():
-            self._create_default_server_config()
-            print(f"已创建默认服务器配置文件: {self.server_config_file}")
-        
-        # 检查并创建认证配置
-        if not self.auth_config_file.exists():
-            self._create_default_auth_config()
-            print(f"已创建默认认证配置文件: {self.auth_config_file}")
-        
-        # 加载现有配置
-        self._load_server_config()
-        self._load_auth_config()
+        # 优先从JSON配置加载
+        if self.json_config_file.exists():
+            self._load_json_config()
+        else:
+            # 检查并创建服务器配置
+            if not self.server_config_file.exists():
+                self._create_default_server_config()
+                print(f"已创建默认服务器配置文件: {self.server_config_file}")
+            
+            # 检查并创建认证配置
+            if not self.auth_config_file.exists():
+                self._create_default_auth_config()
+                print(f"已创建默认认证配置文件: {self.auth_config_file}")
+            
+            # 加载现有配置
+            self._load_server_config()
+            self._load_auth_config()
+            
+            # 迁移到JSON配置
+            self._migrate_to_json_config()
+    
+    def _load_json_config(self):
+        """从JSON配置文件加载配置"""
+        try:
+            with open(self.json_config_file, 'r', encoding='utf-8') as f:
+                config_data = json.load(f)
+            
+            # 验证配置版本
+            if 'version' not in config_data:
+                raise ValueError("配置文件缺少版本信息")
+            
+            # 加载服务器配置
+            if 'server' in config_data:
+                server_config = config_data['server']
+                self.server_config['PORT'] = server_config.get('port', self.server_config['PORT'])
+                self.server_config['MAX_CONCURRENT_THREADS'] = server_config.get('max_concurrent_threads', self.server_config['MAX_CONCURRENT_THREADS'])
+                self.server_config['SHARE_DIR'] = server_config.get('share_dir', self.server_config['SHARE_DIR'])
+                self.server_config['SSL_CERT_FILE'] = server_config.get('ssl_cert_file', self.server_config['SSL_CERT_FILE'])
+                self.server_config['SSL_KEY_FILE'] = server_config.get('ssl_key_file', self.server_config['SSL_KEY_FILE'])
+                self.server_config['FAILED_AUTH_LIMIT'] = server_config.get('failed_auth_limit', self.server_config['FAILED_AUTH_LIMIT'])
+                self.server_config['FAILED_AUTH_BLOCK_TIME'] = server_config.get('failed_auth_block_time', self.server_config['FAILED_AUTH_BLOCK_TIME'])
+                self.server_config['SESSION_TIMEOUT'] = server_config.get('session_timeout', self.server_config['SESSION_TIMEOUT'])
+            
+            # 加载日志配置
+            if 'logging' in config_data:
+                logging_config = config_data['logging']
+                self.logging_config['LOG_LEVEL'] = logging_config.get('log_level', self.logging_config['LOG_LEVEL']).upper()
+                self.logging_config['LOG_FILE'] = logging_config.get('log_file', self.logging_config['LOG_FILE'])
+            
+            # 加载主题配置
+            if 'theme' in config_data:
+                theme_config = config_data['theme']
+                self.theme_config['DEFAULT_THEME'] = theme_config.get('default_theme', self.theme_config['DEFAULT_THEME'])
+            
+            # 加载缓存配置
+            if 'caching' in config_data:
+                caching_config = config_data['caching']
+                self.caching_config['INDEX_CACHE_SIZE'] = caching_config.get('index_cache_size', self.caching_config['INDEX_CACHE_SIZE'])
+                self.caching_config['SEARCH_CACHE_SIZE'] = caching_config.get('search_cache_size', self.caching_config['SEARCH_CACHE_SIZE'])
+                self.caching_config['UPDATE_INTERVAL'] = caching_config.get('update_interval', self.caching_config['UPDATE_INTERVAL'])
+            
+            # 加载认证配置
+            if 'auth' in config_data:
+                auth_config = config_data['auth']
+                self.auth_config['username'] = auth_config.get('username', self.auth_config['username'])
+                self.auth_config['password_hash'] = auth_config.get('password_hash', self.auth_config['password_hash'])
+                self.auth_config['salt'] = auth_config.get('salt', self.auth_config['salt'])
+                # 认证配置中的失败尝试限制优先于服务器配置
+                if 'failed_auth_limit' in auth_config:
+                    self.auth_config['failed_auth_limit'] = auth_config['failed_auth_limit']
+                    self.server_config['FAILED_AUTH_LIMIT'] = auth_config['failed_auth_limit']
+                if 'failed_auth_block_time' in auth_config:
+                    self.auth_config['failed_auth_block_time'] = auth_config['failed_auth_block_time']
+                    self.server_config['FAILED_AUTH_BLOCK_TIME'] = auth_config['failed_auth_block_time']
+            
+            # 加载白名单配置
+            if 'whitelist' in config_data:
+                whitelist_config = config_data['whitelist']
+                if 'image' in whitelist_config:
+                    self.whitelist_config['image'] = whitelist_config['image']
+                if 'audio' in whitelist_config:
+                    self.whitelist_config['audio'] = whitelist_config['audio']
+                if 'video' in whitelist_config:
+                    self.whitelist_config['video'] = whitelist_config['video']
+                
+                # 更新白名单扩展名集合
+                self.ALL_WHITELIST_EXTENSIONS.clear()
+                for ext_list in self.whitelist_config.values():
+                    self.ALL_WHITELIST_EXTENSIONS.update(ext_list)
+            
+            print(f"已从JSON配置文件加载配置: {self.json_config_file}")
+        except Exception as e:
+            print(f"警告：加载JSON配置文件出错，使用默认值: {e}")
+    
+    def _migrate_to_json_config(self):
+        """将现有配置迁移到JSON格式"""
+        try:
+            # 创建JSON配置数据
+            config_data = {
+                "version": "1.0.0",
+                "server": {
+                    "port": self.server_config['PORT'],
+                    "max_concurrent_threads": self.server_config['MAX_CONCURRENT_THREADS'],
+                    "share_dir": self.server_config['SHARE_DIR'],
+                    "ssl_cert_file": self.server_config['SSL_CERT_FILE'],
+                    "ssl_key_file": self.server_config['SSL_KEY_FILE'],
+                    "failed_auth_limit": self.server_config['FAILED_AUTH_LIMIT'],
+                    "failed_auth_block_time": self.server_config['FAILED_AUTH_BLOCK_TIME'],
+                    "session_timeout": self.server_config['SESSION_TIMEOUT']
+                },
+                "logging": {
+                    "log_level": self.logging_config['LOG_LEVEL'],
+                    "log_file": self.logging_config['LOG_FILE']
+                },
+                "theme": {
+                    "default_theme": self.theme_config['DEFAULT_THEME']
+                },
+                "caching": {
+                    "index_cache_size": self.caching_config['INDEX_CACHE_SIZE'],
+                    "search_cache_size": self.caching_config['SEARCH_CACHE_SIZE'],
+                    "update_interval": self.caching_config['UPDATE_INTERVAL']
+                },
+                "auth": {
+                    "username": self.auth_config['username'],
+                    "password_hash": self.auth_config['password_hash'],
+                    "salt": self.auth_config['salt']
+                },
+                "whitelist": {
+                    "image": self.whitelist_config['image'],
+                    "audio": self.whitelist_config['audio'],
+                    "video": self.whitelist_config['video']
+                }
+            }
+            
+            # 写入JSON配置文件
+            with open(self.json_config_file, 'w', encoding='utf-8') as f:
+                json.dump(config_data, f, indent=2, ensure_ascii=False)
+            
+            print(f"已将配置迁移到JSON格式: {self.json_config_file}")
+        except Exception as e:
+            print(f"警告：迁移配置到JSON格式失败: {e}")
     
     def _create_default_server_config(self):
         """创建默认服务器配置文件"""
@@ -210,17 +394,43 @@ class ConfigManager:
     def save_auth_config(self, username=None, password_hash=None, salt=None):
         """保存认证配置"""
         try:
+            # 更新内存中的配置
+            if username is not None:
+                self.auth_config['username'] = username
+            if password_hash is not None:
+                self.auth_config['password_hash'] = password_hash
+            if salt is not None:
+                self.auth_config['salt'] = salt
+            
+            # 保存到旧的INI文件（向后兼容）
             config = configparser.ConfigParser()
             config['AUTH'] = {
-                'username': username or self.auth_config['username'],
-                'password_hash': password_hash or self.auth_config['password_hash'],
-                'salt': salt or self.auth_config['salt'],
+                'username': self.auth_config['username'],
+                'password_hash': self.auth_config['password_hash'],
+                'salt': self.auth_config['salt'],
                 'failed_auth_limit': str(self.auth_config['failed_auth_limit']),
                 'failed_auth_block_time': str(self.auth_config['failed_auth_block_time'])
             }
             
             with open(self.auth_config_file, 'w', encoding='utf-8') as f:
                 config.write(f)
+            
+            # 保存到JSON配置文件
+            if self.json_config_file.exists():
+                # 读取现有JSON配置
+                with open(self.json_config_file, 'r', encoding='utf-8') as f:
+                    config_data = json.load(f)
+                
+                # 更新认证配置
+                if 'auth' not in config_data:
+                    config_data['auth'] = {}
+                config_data['auth']['username'] = self.auth_config['username']
+                config_data['auth']['password_hash'] = self.auth_config['password_hash']
+                config_data['auth']['salt'] = self.auth_config['salt']
+                
+                # 写回JSON配置文件
+                with open(self.json_config_file, 'w', encoding='utf-8') as f:
+                    json.dump(config_data, f, indent=2, ensure_ascii=False)
         except Exception as e:
             print(f"保存认证配置失败: {e}")
     
@@ -288,7 +498,7 @@ class ConfigManager:
         """
         file_ext = Path(file_path).suffix.lower()
         
-        for file_type, extensions in self.WHITELIST_EXTENSIONS.items():
+        for file_type, extensions in self.whitelist_config.items():
             if file_ext in extensions:
                 return file_type
         
@@ -407,11 +617,12 @@ class ConfigManager:
         if ip_address in self.failed_attempts:
             del self.failed_attempts[ip_address]
     
-    def create_session(self, username):
+    def create_session(self, username, device_info=""):
         """创建新会话
         
         Args:
             username (str): 用户名
+            device_info (str): 设备标识信息
             
         Returns:
             str: 会话ID
@@ -422,7 +633,8 @@ class ConfigManager:
         self.sessions[session_id] = {
             'username': username,
             'created_at': current_time,
-            'last_access': current_time
+            'last_access': current_time,
+            'device_info': device_info
         }
         
         return session_id
@@ -443,7 +655,7 @@ class ConfigManager:
         current_time = time.time()
         
         # 检查会话是否过期
-        expire_time = ConfigManager.SESSION_EXPIRE_TIME
+        expire_time = self.server_config['SESSION_TIMEOUT']
         if current_time - session['created_at'] > expire_time:
             del self.sessions[session_id]
             return False
@@ -473,18 +685,138 @@ class ConfigManager:
         """
         if session_id in self.sessions:
             del self.sessions[session_id]
+            self._save_sessions()
     
     def cleanup_expired_sessions(self):
-        """清理过期会话"""
+        """清理过期会话
+        
+        智能超时逻辑：
+        - 一般情况：默认超时时间
+        - 用户正在观看媒体文件：延长超时时间
+        """
         current_time = time.time()
         expired_sessions = []
         
         for session_id, session_data in self.sessions.items():
-            if current_time - session_data['created_at'] > 24 * 3600:
+            # 计算超时时间
+            if session_data.get('media_active', False):
+                # 媒体活跃时，延长超时时间到48小时
+                expire_time = self.server_config['SESSION_TIMEOUT'] * 2
+            else:
+                # 普通超时时间
+                expire_time = self.server_config['SESSION_TIMEOUT']
+            
+            if current_time - session_data['last_access'] > expire_time:
                 expired_sessions.append(session_id)
         
         for session_id in expired_sessions:
             del self.sessions[session_id]
+        
+        # 保存会话状态
+        if expired_sessions:
+            self._save_sessions()
+    
+    def _load_sessions(self):
+        """从文件加载会话数据"""
+        try:
+            if self.session_file.exists():
+                with open(self.session_file, 'r', encoding='utf-8') as f:
+                    sessions_data = json.load(f)
+                    self.sessions = sessions_data
+                print(f"已从 {self.session_file} 加载 {len(self.sessions)} 个会话")
+        except Exception as e:
+            print(f"加载会话文件失败: {e}")
+            self.sessions = {}
+    
+    def _save_sessions(self):
+        """将会话数据保存到文件"""
+        try:
+            with open(self.session_file, 'w', encoding='utf-8') as f:
+                json.dump(self.sessions, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            print(f"保存会话文件失败: {e}")
+    
+    def _start_session_cleanup_thread(self):
+        """启动会话清理线程"""
+        def cleanup_thread():
+            while True:
+                time.sleep(300)  # 每5分钟清理一次
+                self.cleanup_expired_sessions()
+        
+        thread = threading.Thread(target=cleanup_thread, daemon=True)
+        thread.start()
+    
+    def update_session_activity(self, session_id, media_active=False):
+        """更新会话活动状态
+        
+        Args:
+            session_id (str): 会话ID
+            media_active (bool): 媒体是否活跃
+        """
+        if session_id in self.sessions:
+            self.sessions[session_id]['last_access'] = time.time()
+            self.sessions[session_id]['media_active'] = media_active
+            self._save_sessions()
+    
+    def create_session(self, username, device_info=""):
+        """创建新会话
+        
+        Args:
+            username (str): 用户名
+            device_info (str): 设备标识信息
+            
+        Returns:
+            str: 会话ID
+        """
+        session_id = str(uuid.uuid4())
+        current_time = time.time()
+        
+        self.sessions[session_id] = {
+            'username': username,
+            'created_at': current_time,
+            'last_access': current_time,
+            'device_info': device_info,
+            'media_active': False  # 新增媒体活跃状态
+        }
+        
+        # 保存会话
+        self._save_sessions()
+        
+        return session_id
+    
+    def validate_session(self, session_id):
+        """验证会话有效性
+        
+        Args:
+            session_id (str): 会话ID
+            
+        Returns:
+            bool: 会话是否有效
+        """
+        if not session_id or session_id not in self.sessions:
+            return False
+        
+        session = self.sessions[session_id]
+        current_time = time.time()
+        
+        # 计算超时时间
+        if session.get('media_active', False):
+            # 媒体活跃时，延长超时时间到48小时
+            expire_time = self.server_config['SESSION_TIMEOUT'] * 2
+        else:
+            # 普通超时时间
+            expire_time = self.server_config['SESSION_TIMEOUT']
+        
+        # 检查会话是否过期
+        if current_time - session['last_access'] > expire_time:
+            del self.sessions[session_id]
+            self._save_sessions()
+            return False
+        
+        # 更新最后访问时间
+        session['last_access'] = current_time
+        self._save_sessions()
+        return True
     
     def get_config_summary(self):
         """获取配置摘要信息"""
@@ -501,9 +833,9 @@ class ConfigManager:
             },
             'whitelist': {
                 'total_extensions': len(self.ALL_WHITELIST_EXTENSIONS),
-                'image_extensions': self.WHITELIST_EXTENSIONS['image'],
-                'audio_extensions': self.WHITELIST_EXTENSIONS['audio'],
-                'video_extensions': self.WHITELIST_EXTENSIONS['video']
+                'image_extensions': self.whitelist_config['image'],
+                'audio_extensions': self.whitelist_config['audio'],
+                'video_extensions': self.whitelist_config['video']
             }
         }
 

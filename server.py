@@ -16,7 +16,7 @@ import threading
 import time
 import socket
 import hmac
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from config import get_config_manager
 from color_logger import get_rich_logger
@@ -32,6 +32,32 @@ log_level = getattr(logging, config_manager.logging_config['LOG_LEVEL'].upper(),
 logger = get_rich_logger('LANFileServer', log_level)
 
 
+def error_handler(func):
+    """统一错误处理装饰器
+    
+    捕获函数执行过程中的所有异常，记录详细日志，并返回适当的错误响应
+    """
+    def wrapper(*args, **kwargs):
+        try:
+            return func(*args, **kwargs)
+        except Exception as e:
+            # 记录详细错误日志
+            logger.error(f"执行 {func.__name__} 时出错: {e}", exc_info=True)
+            # 对于HTTP请求处理函数，返回500错误
+            if hasattr(args[0], 'send_response'):
+                handler = args[0]
+                try:
+                    handler.send_response(500)
+                    handler.send_header('Content-Type', 'text/html; charset=utf-8')
+                    handler.end_headers()
+                    html = f"<html><body><h1>500 Internal Server Error</h1><p>服务器内部错误，请联系管理员</p></body></html>"
+                    handler.wfile.write(html.encode('utf-8'))
+                except Exception as e2:
+                    logger.error(f"发送错误响应时出错: {e2}", exc_info=True)
+            raise
+    return wrapper
+
+
 class AuthenticationManager:
     """认证管理器 - 处理用户认证和密码验证"""
     
@@ -44,6 +70,7 @@ class AuthenticationManager:
         
         固定用户名: blycr
         密码格式: yyyymmddHHMM (基于当前时间)
+        支持当前时间点前后5分钟内的密码
         
         Args:
             username (str): 用户名
@@ -56,17 +83,25 @@ class AuthenticationManager:
         if username != "blycr":
             return False
         
-        # 生成基于当前时间的密码 (yyyymmddHHMM格式)
+        # 生成基于时间范围的密码列表 (当前时间前后5分钟)
         current_time = datetime.now()
-        expected_password = current_time.strftime("%Y%m%d%H%M")
+        expected_passwords = []
+        
+        # 生成前后5分钟内的所有可能密码
+        for minutes_offset in range(-5, 6):
+            # 计算偏移后的时间
+            offset_time = current_time + timedelta(minutes=minutes_offset)
+            # 生成密码格式 yyyymmddHHMM
+            offset_password = offset_time.strftime("%Y%m%d%H%M")
+            expected_passwords.append(offset_password)
         
         # 信息日志 - 已调整为INFO级别
         logger.info(f"用户认证尝试 - 用户名: {username}")
         logger.debug(f"输入密码: {password}")
-        logger.debug(f"预期密码: {expected_password}")
-        logger.debug(f"密码匹配结果: {password == expected_password}")
+        logger.debug(f"预期密码范围: {expected_passwords}")
+        logger.debug(f"密码匹配结果: {password in expected_passwords}")
         
-        return password == expected_password
+        return password in expected_passwords
     
     def extract_credentials(self, auth_header):
         """从HTTP Authorization头提取认证信息
@@ -95,16 +130,17 @@ class AuthenticationManager:
         except Exception:
             return None, None
     
-    def create_session(self, username):
+    def create_session(self, username, device_info=""):
         """创建新会话
         
         Args:
             username (str): 用户名
+            device_info (str): 设备标识信息
             
         Returns:
             str: 会话ID
         """
-        return self.config_manager.create_session(username)
+        return self.config_manager.create_session(username, device_info)
     
     def validate_session(self, session_id):
         """验证会话有效性
@@ -142,7 +178,10 @@ class AuthenticationManager:
 
 
 class FileIndexer:
-    """文件索引器 - 生成和管理文件索引"""
+    """文件索引器 - 生成和管理文件索引
+    
+    支持增量索引、异步索引和多级缓存机制
+    """
     
     def __init__(self, config_manager):
         self.config_manager = config_manager
@@ -150,23 +189,86 @@ class FileIndexer:
         self.cache = {}
         self.cache_time = 0
         self.cache_duration = 300  # 5分钟缓存
+        
+        # 增量索引相关
+        self.last_index_time = 0
+        self.file_metadata = {}  # 存储文件元数据，用于增量索引
+        
+        # 异步索引相关
+        self.thread_pool = None
+        self.current_index_task = None
+        self.index_lock = threading.Lock()
+        
+        # 多级缓存相关
+        self.enable_multi_level_cache = config_manager.caching_config.get('ENABLE_MULTI_LEVEL_CACHE', True)
+        self.memory_cache_size = config_manager.caching_config.get('MEMORY_CACHE_SIZE', 100)
+        self.disk_cache_enabled = config_manager.caching_config.get('DISK_CACHE_ENABLED', False)
+        
+        # 内存缓存 - 使用LRU策略
+        self.memory_cache = {}
+        self.cache_access_order = []  # 用于LRU缓存
+        
+        # 磁盘缓存目录
+        self.disk_cache_dir = Path('.cache')
+        if self.disk_cache_enabled:
+            self.disk_cache_dir.mkdir(exist_ok=True)
+        
+        # 初始化线程池
+        self._init_thread_pool()
     
-    def generate_index(self, search_term=""):
+    def _init_thread_pool(self):
+        """初始化线程池"""
+        try:
+            from concurrent.futures import ThreadPoolExecutor
+            self.thread_pool = ThreadPoolExecutor(max_workers=2)
+        except Exception as e:
+            logger.error(f"初始化线程池失败: {e}")
+            self.thread_pool = None
+    
+    def generate_index(self, search_term="", use_async=False):
         """生成文件索引
         
         Args:
             search_term (str): 搜索关键词（可选）
+            use_async (bool): 是否使用异步索引
             
         Returns:
             dict: 索引数据
         """
         current_time = time.time()
         
-        # 检查缓存
-        if (self.cache and 
-            current_time - self.cache_time < self.cache_duration and
-            search_term == self.cache.get('search_term', '')):
-            return self.cache
+        # 检查多级缓存
+        cached_data = self._get_cache(search_term)
+        if cached_data:
+            return cached_data
+        
+        if use_async and self.thread_pool:
+            # 使用异步索引
+            return self._generate_index_async(search_term)
+        else:
+            # 同步索引
+            return self._generate_index_sync(search_term)
+    
+    def _generate_index_sync(self, search_term=""):
+        """同步生成文件索引"""
+        with self.index_lock:
+            return self._generate_index_impl(search_term)
+    
+    def _generate_index_async(self, search_term=""):
+        """异步生成文件索引"""
+        from concurrent.futures import Future
+        
+        # 如果有当前任务且未完成，返回当前任务
+        if self.current_index_task and not self.current_index_task.done():
+            return self.cache  # 返回旧缓存
+        
+        # 提交新任务
+        self.current_index_task = self.thread_pool.submit(self._generate_index_impl, search_term)
+        return self.cache  # 返回旧缓存，异步任务完成后会更新缓存
+    
+    def _generate_index_impl(self, search_term=""):
+        """索引生成实现"""
+        current_time = time.time()
         
         index_data = {
             'search_term': search_term,
@@ -189,11 +291,117 @@ class FileIndexer:
             # 更新缓存
             self.cache = index_data
             self.cache_time = current_time
+            self.last_index_time = current_time
+            
+            # 使用多级缓存
+            self._set_cache(search_term, index_data)
+            
+            # 更新文件元数据（用于增量索引）
+            self._update_file_metadata(index_data)
             
         except Exception as e:
             logger.error(f"生成索引时出错: {e}", exc_info=True)
         
         return index_data
+    
+    def _update_file_metadata(self, index_data):
+        """更新文件元数据，用于增量索引"""
+        new_metadata = {}
+        
+        # 处理文件
+        for file_info in index_data['files']:
+            full_path = file_info['full_path']
+            mtime = Path(full_path).stat().st_mtime
+            new_metadata[full_path] = {
+                'size': file_info['size'],
+                'mtime': mtime,
+                'type': file_info['type']
+            }
+        
+        self.file_metadata = new_metadata
+    
+    def _is_file_changed(self, file_path):
+        """检查文件是否已更改（用于增量索引）"""
+        file_path_str = str(file_path)
+        
+        try:
+            stat = file_path.stat()
+            if file_path_str not in self.file_metadata:
+                return True  # 新文件
+            
+            old_metadata = self.file_metadata[file_path_str]
+            return (
+                old_metadata['size'] != stat.st_size or
+                old_metadata['mtime'] != stat.st_mtime
+            )
+        except Exception:
+            return True  # 如果获取文件信息失败，认为文件已更改
+    
+    def _get_cache_key(self, search_term):
+        """生成缓存键"""
+        return f"index_{search_term}"
+    
+    def _get_cache(self, search_term):
+        """从多级缓存中获取数据"""
+        if not self.enable_multi_level_cache:
+            return None
+        
+        cache_key = self._get_cache_key(search_term)
+        
+        # 1. 检查内存缓存
+        if cache_key in self.memory_cache:
+            # 更新访问顺序
+            if cache_key in self.cache_access_order:
+                self.cache_access_order.remove(cache_key)
+            self.cache_access_order.append(cache_key)
+            return self.memory_cache[cache_key]
+        
+        # 2. 检查磁盘缓存
+        if self.disk_cache_enabled:
+            cache_file = self.disk_cache_dir / f"{cache_key}.json"
+            if cache_file.exists():
+                try:
+                    with open(cache_file, 'r', encoding='utf-8') as f:
+                        cached_data = json.load(f)
+                    # 检查缓存是否过期
+                    if time.time() - cached_data.get('timestamp', 0) < self.cache_duration:
+                        # 将磁盘缓存加载到内存缓存
+                        self._set_cache(search_term, cached_data)
+                        return cached_data
+                except Exception as e:
+                    logger.error(f"读取磁盘缓存失败: {e}")
+        
+        return None
+    
+    def _set_cache(self, search_term, data):
+        """设置多级缓存"""
+        if not self.enable_multi_level_cache:
+            return
+        
+        cache_key = self._get_cache_key(search_term)
+        
+        # 1. 设置内存缓存，使用LRU策略
+        self.memory_cache[cache_key] = data
+        
+        # 更新访问顺序
+        if cache_key in self.cache_access_order:
+            self.cache_access_order.remove(cache_key)
+        self.cache_access_order.append(cache_key)
+        
+        # 如果内存缓存超过大小限制，移除最久未使用的缓存
+        if len(self.memory_cache) > self.memory_cache_size:
+            oldest_key = self.cache_access_order.pop(0)
+            if oldest_key in self.memory_cache:
+                del self.memory_cache[oldest_key]
+        
+        # 2. 设置磁盘缓存
+        if self.disk_cache_enabled:
+            cache_file = self.disk_cache_dir / f"{cache_key}.json"
+            try:
+                with open(cache_file, 'w', encoding='utf-8') as f:
+                    json.dump(data, f, indent=2)
+            except Exception as e:
+                logger.error(f"写入磁盘缓存失败: {e}")
     
     def _index_directory_flat(self, dir_path, relative_path, index_data, search_term):
         """扁平化索引目录 - 正常浏览只显示当前目录，搜索时递归搜索所有子目录
@@ -1337,13 +1545,39 @@ class FileServerHandler(BaseHTTPRequestHandler):
             return None
     
     def _send_file_content(self, file_path, range_info=None):
-        """发送文件内容（支持Range请求）
+        """发送文件内容（支持Range请求和sendfile系统调用优化）
         
         Args:
             file_path (str): 文件路径
             range_info (dict): Range信息，包含start和end
         """
         try:
+            file_size = os.path.getsize(file_path)
+            
+            # 尝试使用sendfile系统调用优化传输
+            if hasattr(os, 'sendfile') and not range_info:
+                # 只在非Range请求时使用sendfile
+                try:
+                    with open(file_path, 'rb') as f:
+                        # 获取文件描述符
+                        src_fd = f.fileno()
+                        # 获取socket文件描述符
+                        dst_fd = self.wfile.fileno()
+                        
+                        # 使用sendfile系统调用传输文件
+                        sent = 0
+                        while sent < file_size:
+                            # 每次发送最多1MB
+                            sent_bytes = os.sendfile(dst_fd, src_fd, sent, min(1024 * 1024, file_size - sent))
+                            if sent_bytes == 0:  # 文件传输完成
+                                break
+                            sent += sent_bytes
+                        return
+                except (AttributeError, OSError, IOError) as e:
+                    # sendfile不支持或出错，回退到普通传输方式
+                    logger.debug(f"sendfile系统调用失败，使用普通传输方式: {e}")
+            
+            # 普通传输方式
             with open(file_path, 'rb') as f:
                 if range_info:
                     # Range请求：跳转到指定位置
@@ -1360,7 +1594,6 @@ class FileServerHandler(BaseHTTPRequestHandler):
                             self.wfile.write(chunk)
                     else:
                         # 指定的范围
-                        file_size = os.path.getsize(file_path)
                         end = min(end, file_size - 1)  # 确保不超过文件大小
                         
                         f.seek(start)
@@ -1374,7 +1607,6 @@ class FileServerHandler(BaseHTTPRequestHandler):
                             remaining -= len(chunk)
                 else:
                     # 正常请求：根据文件大小决定传输方式
-                    file_size = os.path.getsize(file_path)
                     if file_size >= 100 * 1024 * 1024:  # 大文件流式传输
                         while True:
                             chunk = f.read(8192)  # 8KB块
@@ -1459,7 +1691,12 @@ class FileServerHandler(BaseHTTPRequestHandler):
             if self.auth_manager.verify_credentials(username, password):
                 # 认证成功，清除失败记录，创建session
                 self.config_manager.reset_failed_attempts(client_ip)
-                session_id = self.auth_manager.create_session(username)
+                
+                # 提取设备信息
+                user_agent = self.headers.get('User-Agent', '')
+                device_info = f"{client_ip} - {user_agent[:100]}"  # 限制长度
+                
+                session_id = self.auth_manager.create_session(username, device_info)
                 
                 # 设置session cookie
                 cookie_value = f"lan_session={session_id}; Path=/; HttpOnly; Max-Age=86400"  # 24小时
@@ -1573,21 +1810,44 @@ class FileServer:
             def create_handler(*args, **kwargs):
                 return FileServerHandler(*args, config_manager=self.config_manager, **kwargs)
             
-            self.server = HTTPServer(('0.0.0.0', port), create_handler)
+            # 检查是否配置了SSL证书和密钥
+            ssl_cert_file = self.config_manager.server_config.get('SSL_CERT_FILE', '')
+            ssl_key_file = self.config_manager.server_config.get('SSL_KEY_FILE', '')
+            
+            use_https = ssl_cert_file and ssl_key_file and Path(ssl_cert_file).exists() and Path(ssl_key_file).exists()
+            
+            if use_https:
+                # 使用HTTPS服务器
+                import ssl
+                
+                context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+                context.load_cert_chain(ssl_cert_file, ssl_key_file)
+                
+                self.server = HTTPServer(('0.0.0.0', port), create_handler)
+                self.server.socket = context.wrap_socket(self.server.socket, server_side=True)
+                
+                protocol = "https"
+            else:
+                # 使用普通HTTP服务器
+                self.server = HTTPServer(('0.0.0.0', port), create_handler)
+                protocol = "http"
+            
             self.running = True
             
             logger.info("=== LAN文件服务器启动成功 ===")
-            logger.info(f"本地访问: http://localhost:{port}")
-            logger.info(f"局域网访问: http://[本机IP]:{port}")
+            logger.info(f"本地访问: {protocol}://localhost:{port}")
+            logger.info(f"局域网访问: {protocol}://[本机IP]:{port}")
             logger.info(f"共享目录: {self.config_manager.server_config['SHARE_DIR']}")
             logger.info(f"白名单文件类型: {len(self.config_manager.ALL_WHITELIST_EXTENSIONS)} 种")
+            logger.info(f"使用协议: {protocol.upper()}")
             logger.info("按 Ctrl+C 停止服务器")
             # 使用章节标题样式展示启动信息
             logger.section("LAN文件服务器启动成功")
-            logger.success(f"本地访问: http://localhost:{port}")
-            logger.success(f"局域网访问: http://[本机IP]:{port}")
+            logger.success(f"本地访问: {protocol}://localhost:{port}")
+            logger.success(f"局域网访问: {protocol}://[本机IP]:{port}")
             logger.info(f"共享目录: {self.config_manager.server_config['SHARE_DIR']}")
             logger.info(f"白名单文件类型: {len(self.config_manager.ALL_WHITELIST_EXTENSIONS)} 种")
+            logger.info(f"使用协议: {protocol.upper()}")
             logger.info("按 Ctrl+C 停止服务器")
             
             # 在新线程中启动服务器
@@ -1623,9 +1883,71 @@ def signal_handler(signum, frame):
         server_instance.stop()
     sys.exit(0)
 
+def _check_critical_files():
+    """检查关键文件完整性"""
+    critical_files = [
+        'config.json',
+        'server.py',
+        'config.py',
+        'color_logger.py'
+    ]
+    
+    damaged_files = []
+    
+    for file_path in critical_files:
+        full_path = Path(file_path)
+        
+        # 检查文件是否存在
+        if not full_path.exists():
+            damaged_files.append(f"{file_path} - 文件不存在")
+            continue
+        
+        # 检查文件是否为空
+        if full_path.stat().st_size == 0:
+            damaged_files.append(f"{file_path} - 文件为空")
+            continue
+        
+        # 针对不同类型文件进行特定检查
+        if file_path == 'config.json':
+            # 检查JSON格式是否正确
+            try:
+                with open(full_path, 'r', encoding='utf-8') as f:
+                    json.load(f)
+            except json.JSONDecodeError as e:
+                damaged_files.append(f"{file_path} - JSON格式错误: {e}")
+        elif file_path.endswith('.py'):
+            # 检查Python文件语法是否正确
+            try:
+                compile(full_path.read_text(encoding='utf-8'), file_path, 'exec')
+            except SyntaxError as e:
+                damaged_files.append(f"{file_path} - Python语法错误: {e}")
+    
+    # 处理检测结果
+    if damaged_files:
+        print("\n⚠️  检测到以下关键文件损坏:")
+        for damage in damaged_files:
+            print(f"   - {damage}")
+        
+        while True:
+            choice = input("\n请选择操作: [i] 忽略并继续, [e] 退出: ").lower()
+            if choice == 'i':
+                logger.warning("用户选择忽略损坏的关键文件，继续运行服务器")
+                return True
+            elif choice == 'e':
+                logger.error("用户选择退出，服务器未启动")
+                return False
+            else:
+                print("无效选择，请重新输入")
+    
+    return True
+
 def main():
     """主函数"""
     global server_instance
+    
+    # 检测关键文件完整性
+    if not _check_critical_files():
+        sys.exit(1)
     
     # 注册信号处理器
     signal.signal(signal.SIGINT, signal_handler)

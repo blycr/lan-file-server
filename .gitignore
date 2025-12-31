@@ -3,6 +3,8 @@
 *.config
 *.conf
 *.cfg
+config.json
+sessions.json
 
 # 备份文件（可能包含敏感信息）
 *.backup
