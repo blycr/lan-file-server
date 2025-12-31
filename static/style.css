@@ -143,6 +143,17 @@ body {
   z-index: 100;
 }
 
+.header-left {
+  display: flex;
+  align-items: center;
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-md);
+}
+
 .title {
   font-size: var(--font-size-large);
   font-weight: 600;
@@ -170,6 +181,96 @@ body {
 
 .theme-toggle:active {
   transform: translateY(0);
+}
+
+.logout-button {
+  background: var(--button-bg);
+  color: var(--button-text);
+  border: none;
+  border-radius: var(--border-radius-md);
+  padding: var(--spacing-sm) var(--spacing-md);
+  font-size: var(--font-size-base);
+  cursor: pointer;
+  transition: all var(--transition-time) ease;
+  box-shadow: var(--shadow-sm);
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  font-weight: 500;
+}
+
+.logout-button:hover {
+  background: var(--button-hover);
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-md);
+  text-decoration: none;
+}
+
+.logout-button:active {
+  transform: translateY(0);
+}
+
+/* 响应式优化 */
+@media (max-width: 768px) {
+  .header {
+    padding: var(--spacing-sm) var(--spacing-md);
+  }
+  
+  .logout-button {
+    padding: var(--spacing-xs) var(--spacing-sm);
+    font-size: var(--font-size-small);
+  }
+}
+
+/* ==================== 导航按钮样式 ==================== */
+.navigation-buttons {
+  display: flex;
+  gap: var(--spacing-md);
+  margin-bottom: var(--spacing-lg);
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+.nav-button {
+  background: var(--button-bg);
+  color: var(--button-text);
+  border: none;
+  border-radius: var(--border-radius-md);
+  padding: var(--spacing-sm) var(--spacing-md);
+  font-size: var(--font-size-base);
+  cursor: pointer;
+  transition: all var(--transition-time) ease;
+  box-shadow: var(--shadow-sm);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  font-weight: 500;
+  min-height: 44px;
+}
+
+.nav-button:hover {
+  background: var(--button-hover);
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-md);
+}
+
+.nav-button:active {
+  transform: translateY(0);
+}
+
+/* 响应式优化 */
+@media (max-width: 768px) {
+  .navigation-buttons {
+    gap: var(--spacing-sm);
+    margin-bottom: var(--spacing-md);
+  }
+  
+  .nav-button {
+    padding: var(--spacing-xs) var(--spacing-sm);
+    font-size: var(--font-size-small);
+    min-height: 38px;
+  }
 }
 
 /* ==================== 主要内容区域 ==================== */
@@ -428,6 +529,127 @@ body {
   border-radius: var(--border-radius-sm);
   border: 1px solid var(--border-color-light);
   white-space: nowrap;
+  margin-bottom: var(--spacing-md);
+}
+
+/* ==================== 排序选择器样式 ==================== */
+.sort-container {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: var(--spacing-sm);
+  margin-bottom: var(--spacing-lg);
+  padding: var(--spacing-sm);
+  background: var(--bg-secondary);
+  border-radius: var(--border-radius-md);
+  border: 1px solid var(--border-color-light);
+  flex-wrap: wrap;
+}
+
+.sort-label {
+  color: var(--text-secondary);
+  font-size: var(--font-size-small);
+  font-weight: 500;
+  white-space: nowrap;
+  margin-right: var(--spacing-xs);
+}
+
+.sort-status {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  color: var(--primary-color);
+  font-size: var(--font-size-small);
+  font-weight: 600;
+  background: var(--bg-primary);
+  padding: var(--spacing-xs) var(--spacing-sm);
+  border-radius: var(--border-radius-sm);
+  border: 1px solid var(--primary-color);
+  animation: fadeIn 0.3s ease-out;
+}
+
+.sort-field {
+  white-space: nowrap;
+}
+
+.sort-order {
+  font-weight: bold;
+  transition: transform 0.2s ease;
+}
+
+.sort-container:hover .sort-order {
+  transform: scale(1.2);
+}
+
+.sort-options {
+  display: flex;
+  gap: var(--spacing-sm);
+  flex-wrap: wrap;
+}
+
+.sort-options select {
+  padding: var(--spacing-xs) var(--spacing-sm);
+  border: 1px solid var(--border-color);
+  border-radius: var(--border-radius-sm);
+  background: var(--input-bg);
+  color: var(--text-primary);
+  font-size: var(--font-size-small);
+  transition: all var(--transition-time) ease;
+  min-width: 100px;
+  -webkit-appearance: none;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%236c757d' d='M6 9l-4-4h8z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+  padding-right: 24px;
+}
+
+.sort-options select:focus {
+  outline: none;
+  border-color: var(--primary-color);
+  box-shadow: 0 0 0 3px rgba(0, 123, 255, 0.1);
+}
+
+.sort-options select:hover {
+  border-color: var(--primary-color);
+  background-color: var(--bg-hover);
+}
+
+/* 响应式设计 */
+@media (max-width: 767px) {
+  .sort-container {
+    justify-content: center;
+  }
+  
+  .sort-label {
+    margin-right: 0;
+  }
+  
+  .sort-options {
+    width: 100%;
+    justify-content: center;
+  }
+  
+  .sort-options select {
+    flex: 1;
+    min-width: 120px;
+  }
+}
+
+@media (max-width: 480px) {
+  .sort-container {
+    flex-direction: column;
+    align-items: stretch;
+    text-align: center;
+  }
+  
+  .sort-options {
+    flex-direction: column;
+  }
+  
+  .sort-options select {
+    width: 100%;
+  }
 }
 
 /* ==================== 文件列表样式 ==================== */

@@ -32,6 +32,21 @@ log_level = getattr(logging, config_manager.logging_config['LOG_LEVEL'].upper(),
 logger = get_rich_logger('LANFileServer', log_level)
 
 
+class HTTPError(Exception):
+    """HTTP错误异常类
+    
+    Args:
+        status_code (int): HTTP状态码
+        message (str): 错误信息
+        details (dict, optional): 详细错误信息
+    """
+    def __init__(self, status_code, message, details=None):
+        self.status_code = status_code
+        self.message = message
+        self.details = details or {}
+        super().__init__(f"HTTP {status_code}: {message}")
+
+
 def error_handler(func):
     """统一错误处理装饰器
     
@@ -40,6 +55,40 @@ def error_handler(func):
     def wrapper(*args, **kwargs):
         try:
             return func(*args, **kwargs)
+        except HTTPError as e:
+            # 处理HTTP错误
+            logger.error(f"HTTP错误: {e}")
+            if hasattr(args[0], 'send_response'):
+                handler = args[0]
+                try:
+                    # 使用HTML模板生成友好的错误页面
+                    if e.status_code == 404:
+                        html = HTMLTemplate.get_404_page()
+                    elif e.status_code == 429:
+                        remaining_time = handler.config_manager.server_config['FAILED_AUTH_BLOCK_TIME']
+                        html = HTMLTemplate.get_blocked_page(remaining_time)
+                    else:
+                        # 生成通用错误页面
+                        content = f"""
+                        <div class="error-container glass-effect">
+                            <div class="error-card glass-card">
+                                <h2>{e.status_code} - {e.message}</h2>
+                                <p>抱歉，服务器遇到了一个错误。</p>
+                                <div class="error-details">
+                                    <p>{e.details.get('description', '')}</p>
+                                </div>
+                                <div class="error-actions">
+                                    <a href="/index" class="action-button">返回首页</a>
+                                    <a href="/browse" class="action-button">浏览目录</a>
+                                </div>
+                            </div>
+                        </div>
+                        """
+                        html = HTMLTemplate.get_base_template(f"{e.status_code} - {e.message}", content)
+                    
+                    handler._send_html_response(html, e.status_code)
+                except Exception as e2:
+                    logger.error(f"发送HTTP错误响应时出错: {e2}", exc_info=True)
         except Exception as e:
             # 记录详细错误日志
             logger.error(f"执行 {func.__name__} 时出错: {e}", exc_info=True)
@@ -47,14 +96,28 @@ def error_handler(func):
             if hasattr(args[0], 'send_response'):
                 handler = args[0]
                 try:
-                    handler.send_response(500)
-                    handler.send_header('Content-Type', 'text/html; charset=utf-8')
-                    handler.end_headers()
-                    html = f"<html><body><h1>500 Internal Server Error</h1><p>服务器内部错误，请联系管理员</p></body></html>"
-                    handler.wfile.write(html.encode('utf-8'))
+                    # 生成500错误页面
+                    content = f"""
+                    <div class="error-container glass-effect">
+                        <div class="error-card glass-card">
+                            <h2>500 - 服务器内部错误</h2>
+                            <p>抱歉，服务器遇到了一个意外的错误。</p>
+                            <div class="error-details">
+                                <p>错误信息: {str(e)}</p>
+                                <p>请联系管理员或稍后重试。</p>
+                            </div>
+                            <div class="error-actions">
+                                <a href="/index" class="action-button">返回首页</a>
+                                <a href="/browse" class="action-button">浏览目录</a>
+                            </div>
+                        </div>
+                    </div>
+                    """
+                    html = HTMLTemplate.get_base_template("500 - 服务器内部错误", content)
+                    handler._send_html_response(html, 500)
                 except Exception as e2:
                     logger.error(f"发送错误响应时出错: {e2}", exc_info=True)
-            raise
+        return
     return wrapper
 
 
@@ -213,23 +276,277 @@ class FileIndexer:
         if self.disk_cache_enabled:
             self.disk_cache_dir.mkdir(exist_ok=True)
         
+        # SQLite索引相关
+        self.sqlite_enabled = config_manager.caching_config.get('ENABLE_SQLITE_INDEX', True)
+        self.sqlite_db_path = Path('.cache/index.db')
+        self.sqlite_conn = None
+        self.sqlite_cursor = None
+        
+        # 初始化SQLite数据库
+        if self.sqlite_enabled:
+            self._init_sqlite_db()
+        
         # 初始化线程池
         self._init_thread_pool()
+    
+    def _init_sqlite_db(self):
+        """初始化SQLite数据库"""
+        try:
+            import sqlite3
+            
+            # 确保缓存目录存在
+            self.sqlite_db_path.parent.mkdir(exist_ok=True)
+            
+            # 建立数据库连接
+            self.sqlite_conn = sqlite3.connect(str(self.sqlite_db_path), check_same_thread=False)
+            self.sqlite_conn.row_factory = sqlite3.Row
+            self.sqlite_cursor = self.sqlite_conn.cursor()
+            
+            # 创建文件索引表
+            self.sqlite_cursor.execute('''
+                CREATE TABLE IF NOT EXISTS file_index (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    path TEXT NOT NULL,
+                    full_path TEXT NOT NULL UNIQUE,
+                    type TEXT NOT NULL,
+                    size INTEGER NOT NULL,
+                    extension TEXT NOT NULL,
+                    modified_time INTEGER NOT NULL,
+                    is_directory INTEGER NOT NULL DEFAULT 0,
+                    created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
+                    updated_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
+                )
+            ''')
+            
+            # 创建索引以提高查询性能
+            self.sqlite_cursor.execute('CREATE INDEX IF NOT EXISTS idx_file_index_name ON file_index(name)')
+            self.sqlite_cursor.execute('CREATE INDEX IF NOT EXISTS idx_file_index_path ON file_index(path)')
+            self.sqlite_cursor.execute('CREATE INDEX IF NOT EXISTS idx_file_index_full_path ON file_index(full_path)')
+            self.sqlite_cursor.execute('CREATE INDEX IF NOT EXISTS idx_file_index_type ON file_index(type)')
+            self.sqlite_cursor.execute('CREATE INDEX IF NOT EXISTS idx_file_index_extension ON file_index(extension)')
+            self.sqlite_cursor.execute('CREATE INDEX IF NOT EXISTS idx_file_index_is_directory ON file_index(is_directory)')
+            
+            # 创建全文搜索虚拟表（如果支持）
+            try:
+                self.sqlite_cursor.execute('''
+                    CREATE VIRTUAL TABLE IF NOT EXISTS file_fts USING fts5(
+                        name,
+                        content=file_index,
+                        content_rowid=id
+                    )
+                ''')
+            except sqlite3.OperationalError:
+                # 不支持FTS5，跳过
+                logger.warning("SQLite FTS5不支持，全文搜索功能将受限")
+            
+            self.sqlite_conn.commit()
+            logger.info("SQLite索引数据库初始化成功")
+        except Exception as e:
+            logger.error(f"初始化SQLite数据库失败: {e}")
+            # 禁用SQLite功能
+            self.sqlite_enabled = False
+            self.sqlite_conn = None
+            self.sqlite_cursor = None
+            return
+        
+        # 初始化数据库后，执行首次填充
+        self._populate_sqlite_db()
+        
+        # 启动定期更新线程
+        self._start_sqlite_update_thread()
+    
+    def _start_sqlite_update_thread(self):
+        """启动定期更新SQLite数据库的后台线程"""
+        if not self.sqlite_enabled:
+            return
+        
+        try:
+            # 每30分钟更新一次数据库
+            update_interval = 30 * 60  # 30分钟，单位：秒
+            
+            # 添加停止标志
+            self._stop_update_thread = False
+            
+            def update_thread_func():
+                """定期更新数据库的线程函数"""
+                while not self._stop_update_thread:
+                    time.sleep(update_interval)
+                    if not self._stop_update_thread:
+                        logger.info("执行SQLite数据库定期更新...")
+                        self._populate_sqlite_db()
+            
+            # 创建并启动后台线程
+            self.sqlite_update_thread = threading.Thread(
+                target=update_thread_func,
+                daemon=True,
+                name="SQLiteUpdateThread"
+            )
+            self.sqlite_update_thread.start()
+            logger.info("SQLite数据库定期更新线程已启动")
+            
+        except Exception as e:
+            logger.error(f"启动SQLite更新线程失败: {e}")
+    
+    def _cleanup(self):
+        """清理资源，关闭线程池和SQLite连接"""
+        logger.info("开始清理FileIndexer资源...")
+        
+        # 停止SQLite定期更新线程
+        self._stop_update_thread = True
+        
+        # 关闭线程池
+        if self.thread_pool:
+            try:
+                self.thread_pool.shutdown(wait=True, cancel_futures=True)
+                logger.info("线程池已关闭")
+            except Exception as e:
+                logger.error(f"关闭线程池失败: {e}")
+        
+        # 关闭SQLite连接和游标
+        if self.sqlite_cursor:
+            try:
+                self.sqlite_cursor.close()
+                logger.info("SQLite游标已关闭")
+            except Exception as e:
+                logger.error(f"关闭SQLite游标失败: {e}")
+        
+        if self.sqlite_conn:
+            try:
+                self.sqlite_conn.close()
+                logger.info("SQLite连接已关闭")
+            except Exception as e:
+                logger.error(f"关闭SQLite连接失败: {e}")
+        
+        logger.info("FileIndexer资源清理完成")
+    
+    def _populate_sqlite_db(self):
+        """初始填充SQLite数据库 - 递归扫描所有目录和文件"""
+        if not self.sqlite_enabled or not self.share_dir.exists():
+            return
+        
+        logger.info("开始填充SQLite数据库...")
+        start_time = time.time()
+        
+        try:
+            # 清空现有数据，避免重复
+            self.sqlite_cursor.execute('DELETE FROM file_index')
+            self.sqlite_conn.commit()
+            
+            # 递归扫描所有目录和文件
+            def scan_directory_recursive(dir_path, relative_path=""):
+                """递归扫描目录"""
+                try:
+                    with os.scandir(str(dir_path)) as scandir_iter:
+                        for item in scandir_iter:
+                            # 跳过隐藏文件和目录
+                            if item.name.startswith('.'):
+                                continue
+                            
+                            # 确保item_name使用UTF-8编码
+                            try:
+                                item_name = str(item.name)
+                            except UnicodeDecodeError:
+                                logger.warning(f"文件名编码错误，跳过: {item}")
+                                continue
+                            
+                            # 构建相对路径
+                            if relative_path and relative_path.strip():
+                                item_relative_path = str(Path(relative_path) / item_name)
+                            else:
+                                item_relative_path = item_name
+                            
+                            # 检查路径安全性
+                            if not self.config_manager.is_path_safe(str(item), str(self.share_dir)):
+                                logger.warning(f"跳过不安全的路径: {item}")
+                                continue
+                            
+                            if item.is_dir():
+                                # 插入目录
+                                try:
+                                    self.sqlite_cursor.execute('''
+                                        INSERT INTO file_index 
+                                        (name, path, full_path, type, size, extension, modified_time, is_directory)
+                                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                                    ''', (
+                                        item_name,
+                                        item_relative_path,
+                                        item.path,
+                                        'directory',
+                                        0,
+                                        '',
+                                        int(item.stat().st_mtime),
+                                        1
+                                    ))
+                                except Exception as e:
+                                    logger.error(f"插入目录失败: {item} - {e}")
+                                
+                                # 递归扫描子目录 - 传递实际路径而不是DirEntry对象
+                                scan_directory_recursive(item.path, item_relative_path)
+                            
+                            elif item.is_file():
+                                # 插入文件
+                                try:
+                                    stat_info = item.stat()
+                                    # 正确获取文件扩展名
+                                    file_ext = Path(item.name).suffix.lower()
+                                    self.sqlite_cursor.execute('''
+                                        INSERT INTO file_index 
+                                        (name, path, full_path, type, size, extension, modified_time, is_directory)
+                                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                                    ''', (
+                                        item_name,
+                                        item_relative_path,
+                                        item.path,
+                                        self.config_manager.get_file_type(item.path),
+                                        stat_info.st_size,
+                                        file_ext,
+                                        int(stat_info.st_mtime),
+                                        0
+                                    ))
+                                except Exception as e:
+                                    logger.error(f"插入文件失败: {item} - {e}")
+                
+                except PermissionError:
+                    logger.warning(f"权限不足，跳过目录: {dir_path}")
+                except Exception as e:
+                    logger.error(f"扫描目录失败: {dir_path} - {e}")
+            
+            # 开始扫描根目录
+            scan_directory_recursive(self.share_dir)
+            
+            # 提交所有更改
+            self.sqlite_conn.commit()
+            
+            end_time = time.time()
+            logger.info(f"SQLite数据库填充完成，耗时: {end_time - start_time:.2f}秒")
+            
+        except Exception as e:
+            logger.error(f"填充SQLite数据库失败: {e}", exc_info=True)
+            # 发生错误时回滚
+            self.sqlite_conn.rollback()
     
     def _init_thread_pool(self):
         """初始化线程池"""
         try:
             from concurrent.futures import ThreadPoolExecutor
-            self.thread_pool = ThreadPoolExecutor(max_workers=2)
+            # 根据CPU核心数动态调整线程池大小
+            import multiprocessing
+            cpu_count = multiprocessing.cpu_count()
+            # 索引和搜索任务通常是IO密集型，线程数可以设置为CPU核心数的1-2倍
+            max_workers = min(4, cpu_count * 2)
+            self.thread_pool = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="IndexWorker")
         except Exception as e:
             logger.error(f"初始化线程池失败: {e}")
             self.thread_pool = None
     
-    def generate_index(self, search_term="", use_async=False):
+    def generate_index(self, search_term="", sort_by="name", sort_order="asc", use_async=False):
         """生成文件索引
         
         Args:
             search_term (str): 搜索关键词（可选）
+            sort_by (str): 排序字段 (name, size, modified, type)
+            sort_order (str): 排序顺序 (asc, desc)
             use_async (bool): 是否使用异步索引
             
         Returns:
@@ -237,24 +554,41 @@ class FileIndexer:
         """
         current_time = time.time()
         
-        # 检查多级缓存
-        cached_data = self._get_cache(search_term)
+        # 优化：先检查是否为简单情况（空搜索），快速返回缓存
+        if not search_term:
+            # 对于空搜索，直接返回根目录内容，不进行递归
+            cached_data = self._get_cache(f"_{sort_by}_{sort_order}")  # 使用特殊缓存键
+            if cached_data:
+                return cached_data
+        
+        # 检查多级缓存，加入排序参数
+        cached_data = self._get_cache(f"{search_term}_{sort_by}_{sort_order}")
         if cached_data:
             return cached_data
         
+        # 移除短关键词限制，允许单字符搜索
+        # 优化：SQLite已处理性能问题，无需手动限制
+        
         if use_async and self.thread_pool:
             # 使用异步索引
-            return self._generate_index_async(search_term)
+            return self._generate_index_async(search_term, sort_by, sort_order)
         else:
-            # 同步索引
-            return self._generate_index_sync(search_term)
+            # 同步索引，添加超时保护
+            start_time = time.time()
+            index_data = self._generate_index_sync(search_term, sort_by, sort_order)
+            
+            # 记录索引生成时间
+            generation_time = time.time() - start_time
+            logger.debug(f"索引生成耗时: {generation_time:.2f}秒，搜索词: '{search_term}'")
+            
+            return index_data
     
-    def _generate_index_sync(self, search_term=""):
+    def _generate_index_sync(self, search_term="", sort_by="name", sort_order="asc"):
         """同步生成文件索引"""
         with self.index_lock:
-            return self._generate_index_impl(search_term)
+            return self._generate_index_impl(search_term, sort_by, sort_order)
     
-    def _generate_index_async(self, search_term=""):
+    def _generate_index_async(self, search_term="", sort_by="name", sort_order="asc"):
         """异步生成文件索引"""
         from concurrent.futures import Future
         
@@ -262,11 +596,11 @@ class FileIndexer:
         if self.current_index_task and not self.current_index_task.done():
             return self.cache  # 返回旧缓存
         
-        # 提交新任务
-        self.current_index_task = self.thread_pool.submit(self._generate_index_impl, search_term)
+        # 提交新任务，包含排序参数
+        self.current_index_task = self.thread_pool.submit(self._generate_index_impl, search_term, sort_by, sort_order)
         return self.cache  # 返回旧缓存，异步任务完成后会更新缓存
     
-    def _generate_index_impl(self, search_term=""):
+    def _generate_index_impl(self, search_term="", sort_by="name", sort_order="asc"):
         """索引生成实现"""
         current_time = time.time()
         
@@ -281,20 +615,84 @@ class FileIndexer:
             return index_data
         
         try:
+            # 首先尝试使用SQLite进行索引和搜索
+            if self.sqlite_enabled:
+                # 使用SQLite索引加速搜索
+                sqlite_index_data = self._generate_index_from_sqlite(search_term, sort_by, sort_order)
+                if sqlite_index_data['directories'] or sqlite_index_data['files']:
+                    # 更新缓存
+                    self.cache = sqlite_index_data
+                    self.cache_time = current_time
+                    self.last_index_time = current_time
+                    
+                    # 使用多级缓存，缓存键包含排序参数
+                    cache_key = f"{search_term}_{sort_by}_{sort_order}"
+                    self._set_cache(cache_key, sqlite_index_data)
+                    
+                    return sqlite_index_data
+            
+            # SQLite索引未命中或禁用，回退到传统文件系统遍历
             # 只显示根目录内容，模仿手机文件管理器体验
             self._index_directory_flat(self.share_dir, "", index_data, search_term)
             
-            # 排序
-            index_data['directories'].sort(key=lambda x: x['name'].lower())
-            index_data['files'].sort(key=lambda x: x['name'].lower())
+            # 为文件添加修改时间信息
+            for file_info in index_data['files']:
+                try:
+                    file_path = Path(file_info['full_path'])
+                    file_info['modified_time'] = file_path.stat().st_mtime
+                except Exception as e:
+                    logger.warning(f"获取文件修改时间失败: {file_info['full_path']} - {e}")
+                    file_info['modified_time'] = 0
+            
+            # 排序函数定义
+            def get_sort_key(item, item_type):
+                """获取排序键"""
+                if item_type == 'directory':
+                    if sort_by == 'name':
+                        return item['name'].lower()
+                    elif sort_by == 'modified':
+                        # 目录的修改时间使用最新子项的时间，这里简化处理
+                        return 0
+                    elif sort_by == 'size':
+                        # 目录大小，这里简化处理
+                        return 0
+                    elif sort_by == 'type':
+                        return 'directory'
+                    else:
+                        return item['name'].lower()
+                else:
+                    if sort_by == 'name':
+                        return item['name'].lower()
+                    elif sort_by == 'size':
+                        return item['size']
+                    elif sort_by == 'modified':
+                        return item['modified_time']
+                    elif sort_by == 'type':
+                        return f"{item['type']}_{item['name'].lower()}"
+                    else:
+                        return item['name'].lower()
+            
+            # 执行排序
+            reverse = (sort_order == 'desc')
+            
+            # 排序目录
+            index_data['directories'].sort(key=lambda x: get_sort_key(x, 'directory'), reverse=reverse)
+            
+            # 排序文件
+            index_data['files'].sort(key=lambda x: get_sort_key(x, 'file'), reverse=reverse)
+            
+            # 添加排序信息到索引数据
+            index_data['sort_by'] = sort_by
+            index_data['sort_order'] = sort_order
             
             # 更新缓存
             self.cache = index_data
             self.cache_time = current_time
             self.last_index_time = current_time
             
-            # 使用多级缓存
-            self._set_cache(search_term, index_data)
+            # 使用多级缓存，缓存键包含排序参数
+            cache_key = f"{search_term}_{sort_by}_{sort_order}"
+            self._set_cache(cache_key, index_data)
             
             # 更新文件元数据（用于增量索引）
             self._update_file_metadata(index_data)
@@ -337,6 +735,79 @@ class FileIndexer:
         except Exception:
             return True  # 如果获取文件信息失败，认为文件已更改
     
+    def _generate_index_from_sqlite(self, search_term="", sort_by="name", sort_order="asc"):
+        """从SQLite数据库生成索引"""
+        index_data = {
+            'search_term': search_term,
+            'timestamp': time.time(),
+            'directories': [],
+            'files': [],
+            'sort_by': sort_by,
+            'sort_order': sort_order
+        }
+        
+        try:
+            # 构建SQL查询
+            base_query = "SELECT * FROM file_index WHERE 1=1"
+            params = []
+            
+            # 添加搜索条件
+            if search_term:
+                base_query += " AND (name LIKE ? OR path LIKE ?)"
+                search_pattern = f"%{search_term}%"
+                params.extend([search_pattern, search_pattern])
+            
+            # 排序逻辑
+            order_map = {
+                'name': 'name',
+                'size': 'size',
+                'modified': 'modified_time',
+                'type': 'type'
+            }
+            order_field = order_map.get(sort_by, 'name')
+            order_dir = "DESC" if sort_order == 'desc' else "ASC"
+            
+            # 目录在前，文件在后
+            base_query += " ORDER BY is_directory DESC, {field} {dir}".format(
+                field=order_field,
+                dir=order_dir
+            )
+            
+            # 执行查询
+            self.sqlite_cursor.execute(base_query, params)
+            rows = self.sqlite_cursor.fetchall()
+            
+            # 转换结果
+            for row in rows:
+                if row['is_directory']:
+                    # 目录
+                    dir_info = {
+                        'name': row['name'],
+                        'path': row['path'],
+                        'full_path': row['full_path'],
+                        'type': 'directory'
+                    }
+                    index_data['directories'].append(dir_info)
+                else:
+                    # 文件 - 只显示白名单内的文件
+                    if row['extension'] in self.config_manager.ALL_WHITELIST_EXTENSIONS:
+                        file_info = {
+                            'name': row['name'],
+                            'path': row['path'],
+                            'full_path': row['full_path'],
+                            'type': row['type'],
+                            'size': row['size'],
+                            'modified_time': row['modified_time'],
+                            'extension': row['extension'],
+                            'size_formatted': self.config_manager.format_file_size(row['size'])
+                        }
+                        index_data['files'].append(file_info)
+                    
+        except Exception as e:
+            logger.error(f"从SQLite生成索引时出错: {e}", exc_info=True)
+        
+        return index_data
+    
     def _get_cache_key(self, search_term):
         """生成缓存键"""
         return f"index_{search_term}"
@@ -348,7 +819,7 @@ class FileIndexer:
         
         cache_key = self._get_cache_key(search_term)
         
-        # 1. 检查内存缓存
+        # 1. 快速检查内存缓存（热点数据）
         if cache_key in self.memory_cache:
             # 更新访问顺序
             if cache_key in self.cache_access_order:
@@ -356,15 +827,17 @@ class FileIndexer:
             self.cache_access_order.append(cache_key)
             return self.memory_cache[cache_key]
         
-        # 2. 检查磁盘缓存
+        # 2. 检查磁盘缓存（冷数据）
         if self.disk_cache_enabled:
             cache_file = self.disk_cache_dir / f"{cache_key}.json"
             if cache_file.exists():
                 try:
-                    with open(cache_file, 'r', encoding='utf-8') as f:
-                        cached_data = json.load(f)
-                    # 检查缓存是否过期
-                    if time.time() - cached_data.get('timestamp', 0) < self.cache_duration:
+                    # 快速检查文件修改时间，避免不必要的文件读取
+                    file_mtime = cache_file.stat().st_mtime
+                    if time.time() - file_mtime < self.cache_duration:
+                        # 读取缓存数据
+                        with open(cache_file, 'r', encoding='utf-8') as f:
+                            cached_data = json.load(f)
                         # 将磁盘缓存加载到内存缓存
                         self._set_cache(search_term, cached_data)
                         return cached_data
@@ -414,11 +887,31 @@ class FileIndexer:
         """
         try:
             # 严格检查目录是否在共享目录内
-            if not self.config_manager.is_path_safe(str(dir_path), str(self.share_dir)):
+            dir_str = str(dir_path)
+            if not self.config_manager.is_path_safe(dir_str, str(self.share_dir)):
                 logger.warning(f"跳过目录遍历攻击尝试: {dir_path}")
                 return
             
-            for item in dir_path.iterdir():
+            # 预编译搜索条件，避免重复计算
+            if search_term:
+                search_lower = search_term.lower()
+            else:
+                search_lower = None
+            
+            # 批量获取目录内容，使用os.scandir提高性能
+            items = []
+            try:
+                with os.scandir(dir_str) as scandir_iter:
+                    # 批量转换为列表，减少IO操作次数
+                    items = list(scandir_iter)
+            except Exception as e:
+                logger.error(f"读取目录内容失败: {dir_path} - {e}")
+                return
+            
+            for item in items:
+                # 快速跳过隐藏文件和目录（以.开头）
+                if item.name.startswith('.'):
+                    continue
                 # 确保item_name使用UTF-8编码，处理所有Unicode字符
                 try:
                     item_name = str(item.name)
@@ -432,17 +925,17 @@ class FileIndexer:
                 else:
                     item_relative_path = item_name
                 
-                # 再次检查路径安全性
-                if not self.config_manager.is_path_safe(str(item), str(self.share_dir)):
-                    logger.warning(f"跳过不安全的路径: {item}")
-                    continue
+                # 只有在搜索时才检查子目录的路径安全性，正常浏览时信任父目录检查
+                if search_term:
+                    if not self.config_manager.is_path_safe(str(item), str(self.share_dir)):
+                        logger.warning(f"跳过不安全的路径: {item}")
+                        continue
                 
                 if item.is_dir():
                     # 检查目录名是否匹配搜索条件
                     directory_matches = True
-                    if search_term:
+                    if search_lower:
                         try:
-                            search_lower = search_term.lower()
                             name_lower = item_name.lower()
                             directory_matches = search_lower in name_lower
                         except Exception as e:
@@ -450,7 +943,7 @@ class FileIndexer:
                             directory_matches = False
                     
                     # 如果目录名匹配搜索条件，或者没有搜索条件（正常浏览），添加目录
-                    if directory_matches or not search_term:
+                    if directory_matches or not search_lower:
                         dir_info = {
                             'name': item_name,
                             'path': item_relative_path,
@@ -460,41 +953,95 @@ class FileIndexer:
                         index_data['directories'].append(dir_info)
                     
                     # 只有在搜索时才递归搜索子目录
-                    if search_term:
-                        self._index_directory_flat(item, item_relative_path, index_data, search_term)
+                    if search_lower:
+                        # 传递实际路径而不是DirEntry对象
+                        self._index_directory_flat(item.path, item_relative_path, index_data, search_term)
+                    
+                    # 插入目录到SQLite数据库
+                    if self.sqlite_enabled:
+                        try:
+                            # 使用INSERT OR REPLACE确保数据更新
+                            self.sqlite_cursor.execute('''
+                                INSERT OR REPLACE INTO file_index 
+                                (name, path, full_path, type, size, extension, modified_time, is_directory, updated_at)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, strftime('%s', 'now'))
+                            ''', (
+                                item_name,
+                                item_relative_path,
+                                item.path,
+                                'directory',
+                                0,  # 目录大小为0
+                                '',  # 目录没有扩展名
+                                int(item.stat().st_mtime),
+                                1  # is_directory = 1表示目录
+                            ))
+                            self.sqlite_conn.commit()
+                        except Exception as e:
+                            logger.error(f"插入目录到SQLite失败: {item} - {e}")
                     
                 elif item.is_file():
-                    # 首先检查是否为白名单文件
-                    if not self.config_manager.is_whitelisted_file(str(item)):
+                    # 获取文件基本信息
+                    file_ext = item.suffix.lower()
+                    
+                    # 只调用一次stat()，减少IO操作
+                    try:
+                        stat_info = item.stat()
+                        size = stat_info.st_size
+                        modified_time = int(stat_info.st_mtime)
+                    except Exception as e:
+                        logger.warning(f"获取文件信息失败: {item} - {e}")
                         continue
                     
-                    # 如果没有搜索条件（正常浏览），或者文件名匹配搜索条件（搜索模式），添加文件
-                    file_matches = True
-                    if search_term:
+                    # 插入所有文件到SQLite数据库，不考虑白名单
+                    if self.sqlite_enabled:
                         try:
-                            search_lower = search_term.lower()
+                            # 使用INSERT OR REPLACE确保数据更新
+                            self.sqlite_cursor.execute('''
+                                INSERT OR REPLACE INTO file_index 
+                                (name, path, full_path, type, size, extension, modified_time, is_directory, updated_at)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, strftime('%s', 'now'))
+                            ''', (
+                                item_name,
+                                item_relative_path,
+                                item.path,
+                                self.config_manager.get_file_type(item.path),
+                                size,
+                                file_ext,
+                                modified_time,
+                                0  # is_directory = 0表示文件
+                            ))
+                            self.sqlite_conn.commit()
+                        except Exception as e:
+                            logger.error(f"插入文件到SQLite失败: {item} - {e}")
+                    
+                    # 检查文件名是否匹配搜索条件
+                    file_matches = True
+                    if search_lower:
+                        try:
                             name_lower = item_name.lower()
                             file_matches = search_lower in name_lower
                         except Exception as e:
                             logger.warning(f"搜索匹配错误: {e}")
                             file_matches = False
                     
-                    if file_matches:
-                        # 添加白名单内的文件
-                        try:
-                            file_info = {
-                                'name': item_name,
-                                'path': item_relative_path,
-                                'full_path': str(item),
-                                'type': self.config_manager.get_file_type(str(item)),
-                                'size': item.stat().st_size,
-                                'size_formatted': self.config_manager.format_file_size(item.stat().st_size),
-                                'extension': item.suffix.lower()
-                            }
-                            index_data['files'].append(file_info)
-                        except Exception as e:
-                            logger.warning(f"获取文件信息失败: {item} - {e}")
-                            continue
+                    # 对于UI显示，只添加白名单内的文件
+                    if file_ext in self.config_manager.ALL_WHITELIST_EXTENSIONS:
+                        if file_matches:
+                            # 添加白名单内的文件到搜索结果
+                            try:
+                                file_info = {
+                                    'name': item_name,
+                                    'path': item_relative_path,
+                                    'full_path': str(item),
+                                    'type': self.config_manager.get_file_type(str(item)),
+                                    'size': size,
+                                    'size_formatted': self.config_manager.format_file_size(size),
+                                    'extension': file_ext
+                                }
+                                index_data['files'].append(file_info)
+                            except Exception as e:
+                                logger.warning(f"添加文件到索引失败: {item} - {e}")
+                                continue
         
         except PermissionError:
             # 忽略权限错误
@@ -590,11 +1137,13 @@ class FileIndexer:
         except Exception as e:
             logger.error(f"索引目录 {dir_path} 时出错: {e}")
     
-    def get_directory_listing(self, dir_path=""):
+    def get_directory_listing(self, dir_path="", sort_by="name", sort_order="asc"):
         """获取目录列表
         
         Args:
             dir_path (str): 相对目录路径
+            sort_by (str): 排序字段 (name, size, modified, type)
+            sort_order (str): 排序顺序 (asc, desc)
             
         Returns:
             dict: 目录列表数据
@@ -629,11 +1178,23 @@ class FileIndexer:
                 else:
                     item_path = item_name
                 
+                # 获取修改时间
+                try:
+                    stat = item.stat()
+                    modified_time = stat.st_mtime
+                    size = stat.st_size
+                except Exception as e:
+                    logger.warning(f"获取文件/目录信息失败: {item} - {e}")
+                    continue
+                
                 if item.is_dir():
                     dir_info = {
                         'name': item_name,
                         'path': item_path,
-                        'type': 'directory'
+                        'type': 'directory',
+                        'size': 0,  # 目录大小设为0
+                        'modified_time': modified_time,
+                        'extension': ''
                     }
                     listing_data['directories'].append(dir_info)
                 
@@ -646,15 +1207,48 @@ class FileIndexer:
                         'name': item_name,
                         'path': item_path,
                         'type': self.config_manager.get_file_type(str(item)),
-                        'size': item.stat().st_size,
-                        'size_formatted': self.config_manager.format_file_size(item.stat().st_size),
-                        'extension': item.suffix.lower()
+                        'size': size,
+                        'size_formatted': self.config_manager.format_file_size(size),
+                        'extension': item.suffix.lower(),
+                        'modified_time': modified_time
                     }
                     listing_data['files'].append(file_info)
             
-            # 排序
-            listing_data['directories'].sort(key=lambda x: x['name'].lower())
-            listing_data['files'].sort(key=lambda x: x['name'].lower())
+            # 合并目录和文件，保持目录在前
+            all_items = [{'is_dir': True, **dir} for dir in listing_data['directories']] + \
+                        [{'is_dir': False, **file} for file in listing_data['files']]
+            
+            # 定义排序键函数
+            def get_sort_key(item):
+                if sort_by == 'name':
+                    return (not item['is_dir'], item['name'].lower())
+                elif sort_by == 'size':
+                    return (not item['is_dir'], item['size'])
+                elif sort_by == 'modified':
+                    return (not item['is_dir'], item['modified_time'])
+                elif sort_by == 'type':
+                    if item['is_dir']:
+                        return (False, 'directory')
+                    else:
+                        return (True, item['type'], item['name'].lower())
+                else:
+                    return (not item['is_dir'], item['name'].lower())
+            
+            # 执行排序
+            reverse = (sort_order == 'desc')
+            all_items.sort(key=get_sort_key, reverse=reverse)
+            
+            # 分离回目录和文件
+            directories = [item for item in all_items if item['is_dir']]
+            files = [item for item in all_items if not item['is_dir']]
+            
+            # 移除is_dir标记，恢复原有格式
+            listing_data['directories'] = [{k: v for k, v in dir_item.items() if k != 'is_dir'} for dir_item in directories]
+            listing_data['files'] = [{k: v for k, v in file_item.items() if k != 'is_dir'} for file_item in files]
+            
+            # 添加排序信息到返回数据中
+            listing_data['sort_by'] = sort_by
+            listing_data['sort_order'] = sort_order
         
         except Exception as e:
             logger.error(f"获取目录列表时出错: {e}")
@@ -762,22 +1356,70 @@ class HTMLTemplate:
             }
         };
         
+        // 导航管理工具类
+        const NavigationManager = {
+            // 初始化导航按钮
+            init() {
+                this.updateButtonVisibility();
+            },
+            
+            // 更新按钮可见性
+            updateButtonVisibility() {
+                const backButton = document.getElementById('back-button');
+                const homeButton = document.getElementById('home-button');
+                
+                if (backButton && homeButton) {
+                    // 获取当前页面路径
+                    const currentPath = window.location.pathname;
+                    
+                    // 检查是否为搜索结果页面
+                    const isSearchPage = currentPath === '/search';
+                    
+                    // 设置可见性：回到上一层按钮在除搜索页面外显示
+                    backButton.style.display = isSearchPage ? 'none' : 'inline-flex';
+                    // 回到首页按钮在所有页面显示
+                    homeButton.style.display = 'inline-flex';
+                }
+            },
+            
+            // 回到上一层功能
+            goBack() {
+                window.history.back();
+            },
+            
+            // 回到首页功能
+            goHome() {
+                window.location.href = '/index';
+            }
+        };
+        
         // 全局主题函数
         function toggleTheme() {
             ThemeManager.toggleTheme();
         }
         
+        // 全局导航函数
+        function goBack() {
+            NavigationManager.goBack();
+        }
+        
+        function goHome() {
+            NavigationManager.goHome();
+        }
+        
         // 立即应用主题（在DOM加载前）
         ThemeManager.forceApplyTheme();
         
-        // DOM加载完成后再次确认
+        // DOM加载完成后初始化
         document.addEventListener('DOMContentLoaded', function() {
             ThemeManager.forceApplyTheme();
+            NavigationManager.init();
         });
         
         // 页面加载完成后的最终保障
         window.addEventListener('load', function() {
             ThemeManager.forceApplyTheme();
+            NavigationManager.init();
         });
     </script>"""
     
@@ -848,11 +1490,22 @@ class HTMLTemplate:
 </head>
 <body>
     <header class="header glass-effect">
-        <h1 class="title">LAN文件服务器</h1>
-        <button id="theme-toggle" class="theme-toggle" onclick="toggleTheme()" title="切换主题">🌙</button>
+        <div class="header-left">
+            <h1 class="title">LAN文件服务器</h1>
+        </div>
+        <div class="header-right">
+            <button id="theme-toggle" class="theme-toggle" onclick="toggleTheme()" title="切换主题">🌙</button>
+            <a href="/logout" class="logout-button" title="退出登录">🚪 登出</a>
+        </div>
     </header>
     
     <main class="main-content glass-container">
+        <!-- 导航按钮 -->
+        <div class="navigation-buttons">
+            <button id="back-button" class="nav-button" onclick="goBack()" title="回到上一层">⬅️ 回到上一层</button>
+            <button id="home-button" class="nav-button" onclick="goHome()" title="回到首页">🏠 回到首页</button>
+        </div>
+        
         {content}
     </main>
     
@@ -903,12 +1556,14 @@ class HTMLTemplate:
         return HTMLTemplate.get_base_template("登录 - LAN文件服务器", content)
     
     @staticmethod
-    def get_index_page(index_data, search_term=""):
+    def get_index_page(index_data, search_term="", sort_by="name", sort_order="asc"):
         """获取索引页面HTML
         
         Args:
             index_data (dict): 索引数据
             search_term (str): 搜索关键词
+            sort_by (str): 排序字段 (name, size, modified, type)
+            sort_order (str): 排序顺序 (asc, desc)
             
         Returns:
             str: 索引页面HTML
@@ -929,6 +1584,39 @@ class HTMLTemplate:
         total_dirs = len(index_data['directories'])
         total_files = len(index_data['files'])
         stats_html = f'<div class="stats">找到 {total_dirs} 个文件夹，{total_files} 个文件</div>'
+        
+        # 排序选择器
+        # 添加排序状态视觉指示
+        sort_indicator = {
+            'name': '名称',
+            'size': '大小',
+            'modified': '修改时间',
+            'type': '文件类型'
+        }.get(sort_by, '名称')
+        
+        order_indicator = '↑' if sort_order == 'asc' else '↓'
+        
+        sort_html = f"""
+        <div class="sort-container">
+            <div class="sort-label">排序方式:</div>
+            <div class="sort-status" title="当前排序">
+                <span class="sort-field">{sort_indicator}</span>
+                <span class="sort-order">{order_indicator}</span>
+            </div>
+            <div class="sort-options">
+                <select id="sort_by" onchange="changeSort()" aria-label="排序字段">
+                    <option value="name" {'selected' if sort_by == 'name' else ''}>名称</option>
+                    <option value="size" {'selected' if sort_by == 'size' else ''}>大小</option>
+                    <option value="modified" {'selected' if sort_by == 'modified' else ''}>修改时间</option>
+                    <option value="type" {'selected' if sort_by == 'type' else ''}>文件类型</option>
+                </select>
+                <select id="sort_order" onchange="changeSort()" aria-label="排序顺序">
+                    <option value="asc" {'selected' if sort_order == 'asc' else ''}>升序</option>
+                    <option value="desc" {'selected' if sort_order == 'desc' else ''}>降序</option>
+                </select>
+            </div>
+        </div>
+        """
         
         # 目录列表
         directories_html = ""
@@ -1003,18 +1691,47 @@ class HTMLTemplate:
             
             <div class="files-content glass-card">
                 {stats_html}
+                {sort_html}
                 {directories_html}
                 {files_html}
                 {no_results_html}
             </div>
         </div>
+        """
         
+        title = f"文件索引 - LAN文件服务器"
+        
+        # 添加搜索管理和排序功能的JavaScript
+        content += f"""
         {HTMLTemplate._get_search_management_js()}
         <script>
             // 初始化搜索功能
             document.addEventListener('DOMContentLoaded', function() {{
                 SearchManager.initSearch();
             }});
+            
+            // 排序功能
+            function changeSort() {{
+                const sortBy = document.getElementById('sort_by').value;
+                const sortOrder = document.getElementById('sort_order').value;
+                
+                // 获取当前URL路径
+                const currentUrl = window.location.href;
+                const url = new URL(currentUrl);
+                
+                // 更新查询参数
+                url.searchParams.set('sort_by', sortBy);
+                url.searchParams.set('sort_order', sortOrder);
+                
+                // 保留搜索参数
+                const searchInput = document.getElementById('search-input');
+                if (searchInput && searchInput.value.trim()) {{
+                    url.searchParams.set('q', encodeURIComponent(searchInput.value.trim()));
+                }}
+                
+                // 重新加载页面
+                window.location.href = url.toString();
+            }}
         </script>
         """
         
@@ -1055,6 +1772,43 @@ class HTMLTemplate:
         # 统计信息
         total_dirs = len(listing_data['directories'])
         total_files = len(listing_data['files'])
+        
+        # 获取当前排序信息
+        current_sort_by = listing_data.get('sort_by', 'name')
+        current_sort_order = listing_data.get('sort_order', 'asc')
+        
+        # 排序选择器 - 添加排序状态视觉指示
+        sort_indicator = {
+            'name': '名称',
+            'size': '大小',
+            'modified': '修改时间',
+            'type': '文件类型'
+        }.get(current_sort_by, '名称')
+        
+        order_indicator = '↑' if current_sort_order == 'asc' else '↓'
+        
+        sort_html = f"""
+        <div class="sort-container">
+            <div class="sort-label">排序方式:</div>
+            <div class="sort-status" title="当前排序">
+                <span class="sort-field">{sort_indicator}</span>
+                <span class="sort-order">{order_indicator}</span>
+            </div>
+            <div class="sort-options">
+                <select id="sort_by" onchange="changeSort()" aria-label="排序字段">
+                    <option value="name" {'selected' if current_sort_by == 'name' else ''}>名称</option>
+                    <option value="size" {'selected' if current_sort_by == 'size' else ''}>大小</option>
+                    <option value="modified" {'selected' if current_sort_by == 'modified' else ''}>修改时间</option>
+                    <option value="type" {'selected' if current_sort_by == 'type' else ''}>文件类型</option>
+                </select>
+                <select id="sort_order" onchange="changeSort()" aria-label="排序顺序">
+                    <option value="asc" {'selected' if current_sort_order == 'asc' else ''}>升序</option>
+                    <option value="desc" {'selected' if current_sort_order == 'desc' else ''}>降序</option>
+                </select>
+            </div>
+        </div>
+        """
+        
         stats_html = f'<div class="stats">当前目录: {total_dirs} 个文件夹，{total_files} 个文件</div>'
         
         # 目录列表
@@ -1137,6 +1891,7 @@ class HTMLTemplate:
             
             <div class="files-content glass-card">
                 {stats_html}
+                {sort_html}
                 {directories_html}
                 {files_html}
             </div>
@@ -1145,7 +1900,7 @@ class HTMLTemplate:
         
         title = f"浏览: {current_path if current_path else '根目录'} - LAN文件服务器"
         
-        # 添加搜索管理的JavaScript
+        # 添加搜索管理和排序功能的JavaScript
         content += f"""
         {HTMLTemplate._get_search_management_js()}
         <script>
@@ -1153,6 +1908,23 @@ class HTMLTemplate:
             document.addEventListener('DOMContentLoaded', function() {{
                 SearchManager.initSearch();
             }});
+            
+            // 排序功能
+            function changeSort() {{
+                const sortBy = document.getElementById('sort_by').value;
+                const sortOrder = document.getElementById('sort_order').value;
+                
+                // 获取当前URL路径
+                const currentUrl = window.location.href;
+                const url = new URL(currentUrl);
+                
+                // 更新查询参数
+                url.searchParams.set('sort_by', sortBy);
+                url.searchParams.set('sort_order', sortOrder);
+                
+                // 重新加载页面
+                window.location.href = url.toString();
+            }}
         </script>
         """
         
@@ -1229,72 +2001,771 @@ class FileServerHandler(BaseHTTPRequestHandler):
         
         super().__init__(*args, **kwargs)
     
+    @error_handler
     def do_GET(self):
         """处理GET请求"""
-        try:
-            # 解析URL
-            parsed_url = urlparse(self.path)
-            path = parsed_url.path
-            query_params = parse_qs(parsed_url.query)
-            
-            # 检查IP封禁
-            client_ip = self.client_address[0]
-            if self.config_manager.is_ip_blocked(client_ip):
-                remaining_time = self.config_manager.server_config['FAILED_AUTH_BLOCK_TIME']
+        # 解析URL
+        parsed_url = urlparse(self.path)
+        path = parsed_url.path
+        query_params = parse_qs(parsed_url.query)
+        
+        # 检查是否需要HTTPS重定向
+        # 通过请求头中的X-Forwarded-Proto判断是否为HTTPS
+        is_https = self.headers.get('X-Forwarded-Proto') == 'https' or hasattr(self.connection, 'getpeername')
+        # 或者通过服务器是否使用SSL判断
+        use_https = hasattr(self.server.socket, 'getpeername')
+        
+        if use_https and not is_https:
+            # 重定向到HTTPS
+            host = self.headers.get('Host')
+            if host:
+                # 确保使用443端口（或配置的HTTPS端口）
+                # 这里简化处理，直接将HTTP请求重定向到HTTPS
+                ssl_port = self.config_manager.server_config.get('SSL_PORT', 443)
+                host_parts = host.split(':')
+                if len(host_parts) > 1:
+                    # 保留原始主机名，替换端口
+                    redirect_host = f"{host_parts[0]}:{ssl_port}"
+                else:
+                    # 使用默认HTTPS端口
+                    redirect_host = host
+                
+                redirect_url = f"https://{redirect_host}{self.path}"
+                self.send_response(301)
+                self.send_header('Location', redirect_url)
+                self.end_headers()
+                return
+        
+        # 检查IP封禁
+        client_ip = self.client_address[0]
+        if self.config_manager.is_ip_blocked(client_ip):
+            remaining_time = self.config_manager.server_config['FAILED_AUTH_BLOCK_TIME']
+            if path.startswith('/api'):
+                # API请求返回JSON格式的封禁响应
+                self.send_response(429)
+                self.send_header('Content-Type', 'application/json; charset=utf-8')
+                import json
+                error_data = json.dumps({
+                    "success": False,
+                    "data": None,
+                    "error": {
+                        "code": 429,
+                        "message": f"IP已被封禁，请{remaining_time}秒后重试"
+                    }
+                }, ensure_ascii=False)
+                self.send_header('Content-Length', str(len(error_data.encode('utf-8'))))
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.end_headers()
+                self.wfile.write(error_data.encode('utf-8'))
+            else:
                 html = HTMLTemplate.get_blocked_page(remaining_time)
                 self._send_html_response(html, 429)
-                return
-            
-            # 检查认证
-            if not self._is_authenticated():
-                if path.startswith('/static/') or path == '/favicon.ico':
-                    # 允许访问静态资源（但通常是认证后访问）
-                    pass
-                else:
-                    # 重定向到登录页面
-                    if path != '/login':
-                        self.send_response(302)
-                        self.send_header('Location', '/login')
-                        self.end_headers()
-                        return
+            return
+        
+        # 检查认证
+        is_api_request = path.startswith('/api')
+        if not self._is_authenticated():
+            if path.startswith('/static/') or path == '/favicon.ico':
+                # 允许访问静态资源
+                pass
+            elif is_api_request:
+                # API请求支持基本认证
+                auth_header = self.headers.get('Authorization')
+                if auth_header and auth_header.startswith('Basic '):
+                    # 尝试基本认证
+                    username, password = self.auth_manager.extract_credentials(auth_header)
+                    if username and password and self.auth_manager.verify_credentials(username, password):
+                        # 基本认证成功
+                        pass
                     else:
-                        # 显示登录页面
-                        html = HTMLTemplate.get_login_page()
-                        self._send_html_response(html)
+                        # 基本认证失败
+                        self.send_response(401)
+                        self.send_header('WWW-Authenticate', 'Basic realm="LAN File Server API"')
+                        self.send_header('Content-Type', 'application/json; charset=utf-8')
+                        import json
+                        error_data = json.dumps({
+                            "success": False,
+                            "data": None,
+                            "error": {
+                                "code": 401,
+                                "message": "未授权访问，请提供有效的认证信息"
+                            }
+                        }, ensure_ascii=False)
+                        self.send_header('Content-Length', str(len(error_data.encode('utf-8'))))
+                        self.send_header('Access-Control-Allow-Origin', '*')
+                        self.end_headers()
+                        self.wfile.write(error_data.encode('utf-8'))
                         return
-            
-            # 路由处理
-            if path == '/' or path == '/index':
-                self._handle_index(query_params)
-            elif path == '/search':
-                self._handle_search(query_params)
-            elif path.startswith('/browse'):
-                self._handle_browse(path)
-            elif path.startswith('/download'):
-                self._handle_download(path)
-            elif path.startswith('/static/'):
-                self._handle_static(path)
-            elif path == '/favicon.ico':
-                self._handle_favicon()
+                else:
+                    # 没有提供认证信息
+                    self.send_response(401)
+                    self.send_header('WWW-Authenticate', 'Basic realm="LAN File Server API"')
+                    self.send_header('Content-Type', 'application/json; charset=utf-8')
+                    import json
+                    error_data = json.dumps({
+                        "success": False,
+                        "data": None,
+                        "error": {
+                            "code": 401,
+                            "message": "未授权访问，请提供有效的认证信息"
+                        }
+                    }, ensure_ascii=False)
+                    self.send_header('Content-Length', str(len(error_data.encode('utf-8'))))
+                    self.send_header('Access-Control-Allow-Origin', '*')
+                    self.end_headers()
+                    self.wfile.write(error_data.encode('utf-8'))
+                    return
             else:
-                # 404页面
+                # 重定向到登录页面
+                if path != '/login':
+                    self.send_response(302)
+                    self.send_header('Location', '/login')
+                    self.end_headers()
+                    return
+                else:
+                    # 显示登录页面
+                    html = HTMLTemplate.get_login_page()
+                    self._send_html_response(html)
+                    return
+        
+        # 路由处理
+        if path == '/' or path == '/index':
+            self._handle_index(query_params)
+        elif path == '/search':
+            self._handle_search(query_params)
+        elif path == '/logout':
+            self._handle_logout()
+        elif path == '/.well-known/appspecific/com.chrome.devtools.json':
+            # 处理Chrome DevTools 404请求，减少日志噪音
+            self.send_response(404)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', '0')
+            self.end_headers()
+            return
+        elif path.startswith('/browse'):
+            self._handle_browse(path)
+        elif path.startswith('/download'):
+            self._handle_download(path)
+        elif path.startswith('/static/'):
+            self._handle_static(path)
+        elif path == '/favicon.ico':
+            self._handle_favicon()
+        # API路由
+        elif path.startswith('/api/files'):
+            self._handle_api_files(path, query_params)
+        elif path.startswith('/api/directories'):
+            self._handle_api_directories(path, query_params)
+        elif path == '/api/search':
+            self._handle_api_search(query_params)
+        elif path.startswith('/api/download'):
+            self._handle_api_download(path)
+        elif path == '/api':
+            self._handle_api_docs()
+        else:
+            # 404页面
+            if path.startswith('/api'):
+                # API请求返回JSON格式404
+                self.send_response(404)
+                self.send_header('Content-Type', 'application/json; charset=utf-8')
+                import json
+                error_data = json.dumps({
+                    "success": False,
+                    "data": None,
+                    "error": {
+                        "code": 404,
+                        "message": "API端点未找到"
+                    }
+                }, ensure_ascii=False)
+                self.send_header('Content-Length', str(len(error_data.encode('utf-8'))))
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.end_headers()
+                self.wfile.write(error_data.encode('utf-8'))
+            else:
                 html = HTMLTemplate.get_404_page()
                 self._send_html_response(html, 404)
-        
-        except Exception as e:
-            logger.info(f"处理GET请求时出错: {e}")
-            self._send_error_response(500, "服务器内部错误")
+            return
     
+    @error_handler
+    def do_OPTIONS(self):
+        """处理OPTIONS请求，用于CORS预检"""
+        self.send_response(200)
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.send_header('Access-Control-Allow-Methods', 'GET, OPTIONS')
+        self.send_header('Access-Control-Allow-Headers', 'Content-Type, Authorization')
+        self.send_header('Access-Control-Max-Age', '86400')  # 24小时
+        self.end_headers()
+    
+    def _handle_api_files(self, path, query_params):
+        """处理API文件请求
+        
+        支持：
+        - GET /api/files - 获取文件列表
+        - GET /api/files/{path} - 获取文件信息
+        """
+        # 提取文件路径
+        if path == '/api/files':
+            # 获取文件列表
+            dir_path = query_params.get('path', [''])[0]
+            sort_by = query_params.get('sort_by', ['name'])[0]
+            sort_order = query_params.get('sort_order', ['asc'])[0]
+            
+            # 验证排序参数
+            if sort_by not in ['name', 'size', 'modified', 'type']:
+                sort_by = 'name'
+            if sort_order not in ['asc', 'desc']:
+                sort_order = 'asc'
+            
+            # 获取目录列表
+            listing_data = self.file_indexer.get_directory_listing(dir_path, sort_by=sort_by, sort_order=sort_order)
+            
+            if listing_data is None:
+                self.send_response(404)
+                self.send_header('Content-Type', 'application/json; charset=utf-8')
+                import json
+                error_data = json.dumps({
+                    "success": False,
+                    "data": None,
+                    "error": {
+                        "code": 404,
+                        "message": "目录不存在"
+                    }
+                }, ensure_ascii=False)
+                self.send_header('Content-Length', str(len(error_data.encode('utf-8'))))
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.end_headers()
+                self.wfile.write(error_data.encode('utf-8'))
+                return
+            
+            # 提取文件列表
+            files = listing_data['files']
+            
+            # 分页支持
+            page = int(query_params.get('page', ['1'])[0])
+            limit = int(query_params.get('limit', ['20'])[0])
+            
+            # 计算分页
+            start = (page - 1) * limit
+            end = start + limit
+            paginated_files = files[start:end]
+            
+            response_data = {
+                "files": paginated_files,
+                "total": len(files),
+                "page": page,
+                "limit": limit,
+                "dir_path": dir_path,
+                "sort_by": sort_by,
+                "sort_order": sort_order
+            }
+            
+            self._send_json_response(response_data)
+        else:
+            # 获取单个文件信息
+            file_path = path[11:]  # 移除 "/api/files/" 前缀
+            if file_path.startswith('/'):
+                file_path = file_path[1:]
+            
+            file_info = self.file_indexer.get_file_info(file_path)
+            
+            if file_info is None:
+                self.send_response(404)
+                self.send_header('Content-Type', 'application/json; charset=utf-8')
+                import json
+                error_data = json.dumps({
+                    "success": False,
+                    "data": None,
+                    "error": {
+                        "code": 404,
+                        "message": "文件不存在"
+                    }
+                }, ensure_ascii=False)
+                self.send_header('Content-Length', str(len(error_data.encode('utf-8'))))
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.end_headers()
+                self.wfile.write(error_data.encode('utf-8'))
+                return
+            
+            self._send_json_response(file_info)
+    
+    @error_handler
     def do_POST(self):
         """处理POST请求"""
+        if self.path == '/login':
+            self._handle_login()
+        else:
+            self._send_error_response(404, "页面未找到")
+    
+    def _handle_api_directories(self, path, query_params):
+        """处理API目录请求
+        
+        支持：
+        - GET /api/directories - 获取目录列表
+        - GET /api/directories/{path} - 获取目录信息
+        """
+        if path == '/api/directories':
+            # 获取目录列表
+            dir_path = query_params.get('path', [''])[0]
+            sort_by = query_params.get('sort_by', ['name'])[0]
+            sort_order = query_params.get('sort_order', ['asc'])[0]
+            
+            # 验证排序参数
+            if sort_by not in ['name', 'size', 'modified', 'type']:
+                sort_by = 'name'
+            if sort_order not in ['asc', 'desc']:
+                sort_order = 'asc'
+            
+            # 获取目录列表
+            listing_data = self.file_indexer.get_directory_listing(dir_path, sort_by=sort_by, sort_order=sort_order)
+            
+            if listing_data is None:
+                self.send_response(404)
+                self.send_header('Content-Type', 'application/json; charset=utf-8')
+                import json
+                error_data = json.dumps({
+                    "success": False,
+                    "data": None,
+                    "error": {
+                        "code": 404,
+                        "message": "目录不存在"
+                    }
+                }, ensure_ascii=False)
+                self.send_header('Content-Length', str(len(error_data.encode('utf-8'))))
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.end_headers()
+                self.wfile.write(error_data.encode('utf-8'))
+                return
+            
+            # 提取目录列表
+            directories = listing_data['directories']
+            
+            # 分页支持
+            page = int(query_params.get('page', ['1'])[0])
+            limit = int(query_params.get('limit', ['20'])[0])
+            
+            # 计算分页
+            start = (page - 1) * limit
+            end = start + limit
+            paginated_dirs = directories[start:end]
+            
+            response_data = {
+                "directories": paginated_dirs,
+                "total": len(directories),
+                "page": page,
+                "limit": limit,
+                "dir_path": dir_path,
+                "sort_by": sort_by,
+                "sort_order": sort_order
+            }
+            
+            self._send_json_response(response_data)
+        else:
+            # 获取目录信息（目录的内容）
+            dir_path = path[17:]  # 移除 "/api/directories/" 前缀
+            if dir_path.startswith('/'):
+                dir_path = dir_path[1:]
+            
+            listing_data = self.file_indexer.get_directory_listing(dir_path)
+            
+            if listing_data is None:
+                self.send_response(404)
+                self.send_header('Content-Type', 'application/json; charset=utf-8')
+                import json
+                error_data = json.dumps({
+                    "success": False,
+                    "data": None,
+                    "error": {
+                        "code": 404,
+                        "message": "目录不存在"
+                    }
+                }, ensure_ascii=False)
+                self.send_header('Content-Length', str(len(error_data.encode('utf-8'))))
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.end_headers()
+                self.wfile.write(error_data.encode('utf-8'))
+                return
+            
+            # 分页支持
+            page = int(query_params.get('page', ['1'])[0])
+            limit = int(query_params.get('limit', ['20'])[0])
+            
+            # 合并文件和目录
+            all_items = []
+            for dir_item in listing_data['directories']:
+                all_items.append({
+                    "name": dir_item["name"],
+                    "path": dir_item["path"],
+                    "type": "directory",
+                    "size": dir_item["size"],
+                    "modified_time": dir_item["modified_time"]
+                })
+            
+            for file_item in listing_data['files']:
+                all_items.append({
+                    "name": file_item["name"],
+                    "path": file_item["path"],
+                    "type": "file",
+                    "size": file_item["size"],
+                    "modified_time": file_item["modified_time"],
+                    "extension": file_item["extension"],
+                    "file_type": file_item["type"]
+                })
+            
+            # 计算分页
+            start = (page - 1) * limit
+            end = start + limit
+            paginated_items = all_items[start:end]
+            
+            response_data = {
+                "items": paginated_items,
+                "total": len(all_items),
+                "page": page,
+                "limit": limit,
+                "dir_path": dir_path,
+                "directories_count": len(listing_data['directories']),
+                "files_count": len(listing_data['files'])
+            }
+            
+            self._send_json_response(response_data)
+    
+    def _handle_api_search(self, query_params):
+        """处理API搜索请求
+        
+        支持：
+        - GET /api/search?q={search_term} - 搜索文件和目录
+        """
+        search_term = query_params.get('q', [''])[0]
+        search_term = unquote(search_term, encoding='utf-8', errors='replace')
+        
+        # 生成索引
+        index_data = self.file_indexer.generate_index(search_term)
+        
+        # 分页支持
+        page = int(query_params.get('page', ['1'])[0])
+        limit = int(query_params.get('limit', ['20'])[0])
+        
+        # 合并文件和目录
+        all_items = []
+        
+        for dir_item in index_data['directories']:
+            all_items.append({
+                "name": dir_item["name"],
+                "path": dir_item["path"],
+                "type": "directory"
+            })
+        
+        for file_item in index_data['files']:
+            all_items.append({
+                "name": file_item["name"],
+                "path": file_item["path"],
+                "type": "file",
+                "size": file_item["size"],
+                "extension": file_item["extension"],
+                "file_type": file_item["type"]
+            })
+        
+        # 计算分页
+        start = (page - 1) * limit
+        end = start + limit
+        paginated_items = all_items[start:end]
+        
+        response_data = {
+            "items": paginated_items,
+            "total": len(all_items),
+            "page": page,
+            "limit": limit,
+            "search_term": search_term,
+            "directories_count": len(index_data['directories']),
+            "files_count": len(index_data['files'])
+        }
+        
+        self._send_json_response(response_data)
+    
+    def _handle_api_download(self, path):
+        """处理API下载请求
+        
+        支持：
+        - GET /api/download/{path} - 下载文件
+        """
+        # 提取文件路径
+        file_path = path[16:]  # 移除 "/api/download/" 前缀
+        if file_path.startswith('/'):
+            file_path = file_path[1:]
+        
+        # URL解码处理中文文件名和特殊字符
         try:
-            if self.path == '/login':
-                self._handle_login()
-            else:
-                self._send_error_response(404, "页面未找到")
+            file_path = unquote(file_path, encoding='utf-8', errors='replace')
         except Exception as e:
-            logger.info(f"处理POST请求时出错: {e}")
-            self._send_error_response(500, "服务器内部错误")
+            logger.warning(f"URL解码失败: {e}")
+            self.send_response(400)
+            self.send_header('Content-Type', 'application/json; charset=utf-8')
+            import json
+            error_data = json.dumps({
+                "success": False,
+                "data": None,
+                "error": {
+                    "code": 400,
+                    "message": "无效的文件路径"
+                }
+            }, ensure_ascii=False)
+            self.send_header('Content-Length', str(len(error_data.encode('utf-8'))))
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            self.wfile.write(error_data.encode('utf-8'))
+            return
+        
+        # 调用现有的下载处理方法
+        # 重写path，然后调用_handle_download
+        original_path = self.path
+        self.path = f"/download/{file_path}"
+        
+        try:
+            self._handle_download(self.path)
+        finally:
+            self.path = original_path
+    
+    def _handle_api_docs(self):
+        """处理API文档请求
+        
+        支持：
+        - GET /api - 显示API文档
+        """
+        docs_html = """
+        <!DOCTYPE html>
+        <html lang="zh-CN">
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>LAN文件服务器API文档</title>
+            <style>
+                body {
+                    font-family: Arial, sans-serif;
+                    max-width: 1200px;
+                    margin: 0 auto;
+                    padding: 20px;
+                    background-color: #f5f5f5;
+                }
+                h1 {
+                    color: #333;
+                    text-align: center;
+                }
+                .endpoint {
+                    background-color: white;
+                    padding: 20px;
+                    margin: 20px 0;
+                    border-radius: 8px;
+                    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+                }
+                .method {
+                    display: inline-block;
+                    padding: 5px 10px;
+                    border-radius: 4px;
+                    font-weight: bold;
+                    color: white;
+                }
+                .get {
+                    background-color: #28a745;
+                }
+                .path {
+                    font-family: monospace;
+                    font-size: 18px;
+                    margin: 10px 0;
+                    color: #007bff;
+                }
+                .description {
+                    color: #666;
+                    margin: 10px 0;
+                }
+                .params {
+                    margin: 15px 0;
+                }
+                .param {
+                    margin: 10px 0;
+                    padding: 10px;
+                    background-color: #f0f0f0;
+                    border-radius: 4px;
+                }
+                .param-name {
+                    font-weight: bold;
+                }
+                .param-type {
+                    color: #666;
+                    font-style: italic;
+                }
+                .example {
+                    background-color: #f8f9fa;
+                    padding: 15px;
+                    border-radius: 4px;
+                    margin: 15px 0;
+                }
+                .example h4 {
+                    margin-top: 0;
+                }
+                .example code {
+                    font-family: monospace;
+                    background-color: #e9ecef;
+                    padding: 2px 5px;
+                    border-radius: 3px;
+                }
+            </style>
+        </head>
+        <body>
+            <h1>LAN文件服务器API文档</h1>
+            
+            <div class="endpoint">
+                <h2>文件相关API</h2>
+                
+                <div class="endpoint">
+                    <div class="method get">GET</div>
+                    <div class="path">/api/files</div>
+                    <div class="description">获取文件列表</div>
+                    <div class="params">
+                        <div class="param">
+                            <div class="param-name">path</div>
+                            <div class="param-type">string (可选)</div>
+                            <div class="param-description">目录路径，默认根目录</div>
+                        </div>
+                        <div class="param">
+                            <div class="param-name">sort_by</div>
+                            <div class="param-type">string (可选)</div>
+                            <div class="param-description">排序字段：name, size, modified, type，默认name</div>
+                        </div>
+                        <div class="param">
+                            <div class="param-name">sort_order</div>
+                            <div class="param-type">string (可选)</div>
+                            <div class="param-description">排序顺序：asc, desc，默认asc</div>
+                        </div>
+                        <div class="param">
+                            <div class="param-name">page</div>
+                            <div class="param-type">integer (可选)</div>
+                            <div class="param-description">页码，默认1</div>
+                        </div>
+                        <div class="param">
+                            <div class="param-name">limit</div>
+                            <div class="param-type">integer (可选)</div>
+                            <div class="param-description">每页数量，默认20</div>
+                        </div>
+                    </div>
+                    <div class="example">
+                        <h4>示例请求：</h4>
+                        <code>GET /api/files?path=documents&sort_by=modified&sort_order=desc</code>
+                    </div>
+                </div>
+                
+                <div class="endpoint">
+                    <div class="method get">GET</div>
+                    <div class="path">/api/files/{path}</div>
+                    <div class="description">获取单个文件信息</div>
+                    <div class="example">
+                        <h4>示例请求：</h4>
+                        <code>GET /api/files/documents/report.pdf</code>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="endpoint">
+                <h2>目录相关API</h2>
+                
+                <div class="endpoint">
+                    <div class="method get">GET</div>
+                    <div class="path">/api/directories</div>
+                    <div class="description">获取目录列表</div>
+                    <div class="params">
+                        <div class="param">
+                            <div class="param-name">path</div>
+                            <div class="param-type">string (可选)</div>
+                            <div class="param-description">目录路径，默认根目录</div>
+                        </div>
+                        <div class="param">
+                            <div class="param-name">sort_by</div>
+                            <div class="param-type">string (可选)</div>
+                            <div class="param-description">排序字段：name, size, modified, type，默认name</div>
+                        </div>
+                        <div class="param">
+                            <div class="param-name">sort_order</div>
+                            <div class="param-type">string (可选)</div>
+                            <div class="param-description">排序顺序：asc, desc，默认asc</div>
+                        </div>
+                        <div class="param">
+                            <div class="param-name">page</div>
+                            <div class="param-type">integer (可选)</div>
+                            <div class="param-description">页码，默认1</div>
+                        </div>
+                        <div class="param">
+                            <div class="param-name">limit</div>
+                            <div class="param-type">integer (可选)</div>
+                            <div class="param-description">每页数量，默认20</div>
+                        </div>
+                    </div>
+                    <div class="example">
+                        <h4>示例请求：</h4>
+                        <code>GET /api/directories?path=documents</code>
+                    </div>
+                </div>
+                
+                <div class="endpoint">
+                    <div class="method get">GET</div>
+                    <div class="path">/api/directories/{path}</div>
+                    <div class="description">获取目录内容</div>
+                    <div class="example">
+                        <h4>示例请求：</h4>
+                        <code>GET /api/directories/documents</code>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="endpoint">
+                <h2>搜索API</h2>
+                
+                <div class="endpoint">
+                    <div class="method get">GET</div>
+                    <div class="path">/api/search</div>
+                    <div class="description">搜索文件和目录</div>
+                    <div class="params">
+                        <div class="param">
+                            <div class="param-name">q</div>
+                            <div class="param-type">string (必填)</div>
+                            <div class="param-description">搜索关键词</div>
+                        </div>
+                        <div class="param">
+                            <div class="param-name">page</div>
+                            <div class="param-type">integer (可选)</div>
+                            <div class="param-description">页码，默认1</div>
+                        </div>
+                        <div class="param">
+                            <div class="param-name">limit</div>
+                            <div class="param-type">integer (可选)</div>
+                            <div class="param-description">每页数量，默认20</div>
+                        </div>
+                    </div>
+                    <div class="example">
+                        <h4>示例请求：</h4>
+                        <code>GET /api/search?q=report&page=1&limit=10</code>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="endpoint">
+                <h2>下载API</h2>
+                
+                <div class="endpoint">
+                    <div class="method get">GET</div>
+                    <div class="path">/api/download/{path}</div>
+                    <div class="description">下载文件</div>
+                    <div class="example">
+                        <h4>示例请求：</h4>
+                        <code>GET /api/download/documents/report.pdf</code>
+                    </div>
+                </div>
+            </div>
+        </body>
+        </html>
+        """
+        
+        self.send_response(200)
+        self.send_header('Content-Type', 'text/html; charset=utf-8')
+        self.send_header('Content-Length', str(len(docs_html.encode('utf-8'))))
+        self.end_headers()
+        self.wfile.write(docs_html.encode('utf-8'))
     
     def _is_authenticated(self):
         """检查是否已认证"""
@@ -1343,13 +2814,40 @@ class FileServerHandler(BaseHTTPRequestHandler):
         except Exception:
             return None
     
+    @error_handler
+    def _handle_logout(self):
+        """处理登出请求"""
+        # 提取session_id
+        cookie_header = self.headers.get('Cookie', '')
+        session_id = self._extract_session_id(cookie_header)
+        
+        # 删除服务器端session
+        if session_id:
+            self.auth_manager.delete_session(session_id)
+        
+        # 设置过期的session cookie
+        self.send_response(302)
+        self.send_header('Location', '/login')
+        self.send_header('Set-Cookie', 'lan_session=; Path=/; HttpOnly; Max-Age=0')
+        self.end_headers()
+    
     def _handle_index(self, query_params):
         """处理索引页面请求"""
         search_term = query_params.get('search', [''])[0]
         search_term = unquote(search_term, encoding='utf-8', errors='replace')
         
-        index_data = self.file_indexer.generate_index(search_term)
-        html = HTMLTemplate.get_index_page(index_data, search_term)
+        # 获取排序参数
+        sort_by = query_params.get('sort_by', ['name'])[0]
+        sort_order = query_params.get('sort_order', ['asc'])[0].lower()
+        
+        # 验证排序参数
+        if sort_by not in ['name', 'size', 'modified', 'type']:
+            sort_by = 'name'
+        if sort_order not in ['asc', 'desc']:
+            sort_order = 'asc'
+        
+        index_data = self.file_indexer.generate_index(search_term, sort_by=sort_by, sort_order=sort_order)
+        html = HTMLTemplate.get_index_page(index_data, search_term, sort_by, sort_order)
         self._send_html_response(html)
     
     def _handle_search(self, query_params):
@@ -1357,8 +2855,18 @@ class FileServerHandler(BaseHTTPRequestHandler):
         search_term = query_params.get('q', [''])[0]
         search_term = unquote(search_term, encoding='utf-8', errors='replace')
         
-        index_data = self.file_indexer.generate_index(search_term)
-        html = HTMLTemplate.get_index_page(index_data, search_term)
+        # 获取排序参数
+        sort_by = query_params.get('sort_by', ['name'])[0]
+        sort_order = query_params.get('sort_order', ['asc'])[0].lower()
+        
+        # 验证排序参数
+        if sort_by not in ['name', 'size', 'modified', 'type']:
+            sort_by = 'name'
+        if sort_order not in ['asc', 'desc']:
+            sort_order = 'asc'
+        
+        index_data = self.file_indexer.generate_index(search_term, sort_by=sort_by, sort_order=sort_order)
+        html = HTMLTemplate.get_index_page(index_data, search_term, sort_by, sort_order)
         self._send_html_response(html)
     
     def _handle_browse(self, path):
@@ -1377,7 +2885,21 @@ class FileServerHandler(BaseHTTPRequestHandler):
             self._send_html_response(html, 404)
             return
         
-        listing_data = self.file_indexer.get_directory_listing(relative_path)
+        # 获取查询参数中的排序参数
+        parsed_url = urlparse(self.path)
+        query_params = parse_qs(parsed_url.query)
+        
+        # 获取排序参数，默认按名称升序
+        sort_by = query_params.get('sort_by', ['name'])[0]
+        sort_order = query_params.get('sort_order', ['asc'])[0].lower()
+        
+        # 验证排序参数
+        if sort_by not in ['name', 'size', 'modified', 'type']:
+            sort_by = 'name'
+        if sort_order not in ['asc', 'desc']:
+            sort_order = 'asc'
+        
+        listing_data = self.file_indexer.get_directory_listing(relative_path, sort_by=sort_by, sort_order=sort_order)
         
         if listing_data is None:
             html = HTMLTemplate.get_404_page()
@@ -1433,9 +2955,25 @@ class FileServerHandler(BaseHTTPRequestHandler):
             content_type = mimetypes.guess_type(file_info['full_path'])[0] or 'application/octet-stream'
             
             # 检测文件类型决定是否inline显示
-            inline_types = {'image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp', 
-                           'video/mp4', 'video/webm', 'video/ogg', 'video/avi', 'video/mov'}
-            is_inline = content_type in inline_types
+            # 增强文件预览支持，添加更多文件类型
+            inline_types = {
+                # 图片类型
+                'image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp', 'image/bmp', 'image/svg+xml',
+                # 视频类型
+                'video/mp4', 'video/webm', 'video/ogg', 'video/avi', 'video/mov', 'video/mkv', 'video/wmv', 'video/flv',
+                # 音频类型
+                'audio/mpeg', 'audio/wav', 'audio/ogg', 'audio/mp3', 'audio/wma', 'audio/m4a', 'audio/flac',
+                # 文本和代码类型
+                'text/plain', 'text/html', 'text/css', 'text/javascript', 'application/javascript',
+                'application/json', 'application/xml', 'text/xml',
+                'text/x-python', 'text/x-c', 'text/x-c++', 'text/x-java', 'text/x-javascript',
+                'text/x-html', 'text/x-css',
+                # 文档类型
+                'application/pdf',
+                # 其他可预览类型
+                'application/rtf'
+            }
+            is_inline = content_type in inline_types or content_type.startswith('text/')
             
             # 处理Range请求
             if range_info:
@@ -1764,6 +3302,47 @@ class FileServerHandler(BaseHTTPRequestHandler):
         }
         return content_types.get(file_extension.lower(), 'application/octet-stream')
     
+    def _send_json_response(self, data, status_code=200):
+        """发送JSON格式响应
+        
+        Args:
+            data (dict): 响应数据
+            status_code (int): HTTP状态码
+        """
+        try:
+            import json
+            response = {
+                "success": True,
+                "data": data,
+                "error": None
+            }
+            json_data = json.dumps(response, ensure_ascii=False, indent=2)
+            
+            self.send_response(status_code)
+            self.send_header('Content-Type', 'application/json; charset=utf-8')
+            self.send_header('Content-Length', str(len(json_data.encode('utf-8'))))
+            self.send_header('Access-Control-Allow-Origin', '*')  # 允许跨域请求
+            self.send_header('Access-Control-Allow-Methods', 'GET, OPTIONS')
+            self.send_header('Access-Control-Allow-Headers', 'Content-Type, Authorization')
+            self.end_headers()
+            self.wfile.write(json_data.encode('utf-8'))
+        except Exception as e:
+            logger.error(f"发送JSON响应时出错: {e}")
+            # 发送简单的错误响应
+            self.send_response(500)
+            self.send_header('Content-Type', 'application/json; charset=utf-8')
+            error_data = json.dumps({
+                "success": False,
+                "data": None,
+                "error": {
+                    "code": 500,
+                    "message": "服务器内部错误"
+                }
+            }, ensure_ascii=False)
+            self.send_header('Content-Length', str(len(error_data.encode('utf-8'))))
+            self.end_headers()
+            self.wfile.write(error_data.encode('utf-8'))
+    
     def _send_error_response(self, status_code, message):
         """发送错误响应
         
@@ -1771,16 +3350,8 @@ class FileServerHandler(BaseHTTPRequestHandler):
             status_code (int): HTTP状态码
             message (str): 错误信息
         """
-        error_html = f"""
-        <html>
-        <head><title>Error {status_code}</title></head>
-        <body>
-            <h1>Error {status_code}</h1>
-            <p>{message}</p>
-        </body>
-        </html>
-        """
-        self._send_html_response(error_html, status_code)
+        # 使用新的HTTPError异常机制
+        raise HTTPError(status_code, message, {'description': message})
     
     def log_message(self, format, *args):
         """重写日志方法，减少输出"""
@@ -1796,6 +3367,84 @@ class FileServer:
         self.server = None
         self.server_thread = None
         self.running = False
+    
+    def _generate_self_signed_cert(self, cert_file, key_file):
+        """生成自签名SSL证书
+        
+        Args:
+            cert_file (str): 证书文件路径
+            key_file (str): 密钥文件路径
+        """
+        try:
+            from cryptography import x509
+            from cryptography.x509.oid import NameOID
+            from cryptography.hazmat.primitives import hashes
+            from cryptography.hazmat.primitives.asymmetric import rsa
+            from cryptography.hazmat.primitives import serialization
+            from cryptography.hazmat.backends import default_backend
+            from datetime import datetime, timedelta, UTC
+            import socket
+            
+            # 生成私钥
+            private_key = rsa.generate_private_key(
+                public_exponent=65537,
+                key_size=2048,
+                backend=default_backend()
+            )
+            
+            # 获取当前主机名
+            hostname = socket.gethostname()
+            
+            # 生成证书签名请求
+            subject = issuer = x509.Name([
+                x509.NameAttribute(NameOID.COUNTRY_NAME, "CN"),
+                x509.NameAttribute(NameOID.STATE_OR_PROVINCE_NAME, "Beijing"),
+                x509.NameAttribute(NameOID.LOCALITY_NAME, "Beijing"),
+                x509.NameAttribute(NameOID.ORGANIZATION_NAME, "LAN File Server"),
+                x509.NameAttribute(NameOID.COMMON_NAME, hostname),
+            ])
+            
+            # 生成证书
+            cert = x509.CertificateBuilder().subject_name(
+                subject
+            ).issuer_name(
+                issuer
+            ).public_key(
+                private_key.public_key()
+            ).serial_number(
+                x509.random_serial_number()
+            ).not_valid_before(
+                datetime.now(UTC)
+            ).not_valid_after(
+                # 证书有效期为1年
+                datetime.now(UTC) + timedelta(days=365)
+            ).add_extension(
+                x509.SubjectAlternativeName([x509.DNSName(hostname), x509.DNSName("localhost")]),
+                critical=False,
+            ).sign(private_key, hashes.SHA256(), default_backend())
+            
+            # 保存证书
+            with open(cert_file, "wb") as f:
+                f.write(cert.public_bytes(serialization.Encoding.PEM))
+            
+            # 保存私钥
+            with open(key_file, "wb") as f:
+                f.write(private_key.private_bytes(
+                    encoding=serialization.Encoding.PEM,
+                    format=serialization.PrivateFormat.TraditionalOpenSSL,
+                    encryption_algorithm=serialization.NoEncryption()
+                ))
+            
+            logger.info(f"已生成自签名SSL证书: {cert_file}")
+            logger.info(f"已生成SSL密钥: {key_file}")
+            return True
+        except ImportError as e:
+            logger.warning(f"生成自签名证书失败：缺少依赖库: {e}")
+            logger.warning("请安装cryptography库: pip install cryptography")
+            return False
+        except Exception as e:
+            logger.error(f"生成自签名证书失败: {e}")
+            return False
     
     def start(self):
         """启动服务器"""
@@ -1814,6 +3463,25 @@ class FileServer:
             ssl_cert_file = self.config_manager.server_config.get('SSL_CERT_FILE', '')
             ssl_key_file = self.config_manager.server_config.get('SSL_KEY_FILE', '')
             
+            # 尝试生成自签名证书（如果没有配置证书）
+            if not ssl_cert_file or not ssl_key_file or not Path(ssl_cert_file).exists() or not Path(ssl_key_file).exists():
+                logger.info("没有找到SSL证书，尝试生成自签名证书...")
+                # 生成默认的证书和密钥文件路径
+                default_cert_file = str(Path('.') / 'ssl_cert.pem')
+                default_key_file = str(Path('.') / 'ssl_key.pem')
+                
+                # 更新配置
+                self.config_manager.server_config['SSL_CERT_FILE'] = default_cert_file
+                self.config_manager.server_config['SSL_KEY_FILE'] = default_key_file
+                
+                # 生成自签名证书
+                self._generate_self_signed_cert(default_cert_file, default_key_file)
+                
+                # 重新检查证书和密钥
+                ssl_cert_file = default_cert_file
+                ssl_key_file = default_key_file
+            
+            # 检查证书和密钥是否存在
             use_https = ssl_cert_file and ssl_key_file and Path(ssl_cert_file).exists() and Path(ssl_key_file).exists()
             
             if use_https:
@@ -1864,11 +3532,38 @@ class FileServer:
         """停止服务器"""
         if self.server and self.running:
             logger.info("正在停止服务器...")
-            logger.info("\n正在停止服务器...")
             self.running = False
-            self.server.shutdown()
-            self.server.server_close()
-            logger.info("服务器已停止")
+            
+            # 清理FileIndexer资源
+            try:
+                if hasattr(self, 'file_indexer'):
+                    self.file_indexer._cleanup()
+            except Exception as e:
+                logger.error(f"清理FileIndexer资源失败: {e}")
+            
+            # 设置超时保护，确保服务器能在10秒内停止
+            def server_shutdown_with_timeout():
+                try:
+                    self.server.shutdown()
+                    return True
+                except Exception as e:
+                    logger.error(f"服务器关闭超时或失败: {e}")
+                    return False
+            
+            import threading
+            shutdown_thread = threading.Thread(target=server_shutdown_with_timeout)
+            shutdown_thread.daemon = True
+            shutdown_thread.start()
+            
+            # 等待最长10秒
+            shutdown_thread.join(timeout=10)
+            
+            # 关闭服务器
+            try:
+                self.server.server_close()
+            except Exception as e:
+                logger.error(f"关闭服务器套接字失败: {e}")
+            
             logger.info("服务器已停止")
 
 
@@ -1881,7 +3576,8 @@ def signal_handler(signum, frame):
     logger.info(f"\n收到信号 {signum}，正在退出...")
     if server_instance:
         server_instance.stop()
-    sys.exit(0)
+    # 移除sys.exit(0)，让服务器自然停止
+    # 主线程会在server_thread结束后退出
 
 def _check_critical_files():
     """检查关键文件完整性"""

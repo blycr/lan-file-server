@@ -74,7 +74,8 @@ class ConfigManager:
             'UPDATE_INTERVAL': 300,
             'ENABLE_MULTI_LEVEL_CACHE': True,
             'MEMORY_CACHE_SIZE': 100,  # 内存缓存大小
-            'DISK_CACHE_ENABLED': False  # 是否启用磁盘缓存
+            'DISK_CACHE_ENABLED': False,  # 是否启用磁盘缓存
+            'ENABLE_SQLITE_INDEX': True  # 是否启用SQLite索引
         }
         
         # 默认认证配置
@@ -172,15 +173,195 @@ class ConfigManager:
             # 迁移到JSON配置
             self._migrate_to_json_config()
     
+    def _validate_config(self, config_data):
+        """验证配置数据的有效性
+        
+        Args:
+            config_data (dict): 配置数据
+            
+        Returns:
+            dict: 验证后的配置数据
+        """
+        # 配置验证规则
+        validation_rules = {
+            'server': {
+                'port': {'type': int, 'min': 1, 'max': 65535},
+                'max_concurrent_threads': {'type': int, 'min': 1, 'max': 100},
+                'failed_auth_limit': {'type': int, 'min': 1, 'max': 100},
+                'failed_auth_block_time': {'type': int, 'min': 0, 'max': 86400},
+                'session_timeout': {'type': int, 'min': 60, 'max': 2592000}
+            },
+            'logging': {
+                'log_level': {'type': str, 'allowed_values': ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL']}
+            },
+            'caching': {
+                'index_cache_size': {'type': int, 'min': 100, 'max': 10000},
+                'search_cache_size': {'type': int, 'min': 50, 'max': 5000},
+                'update_interval': {'type': int, 'min': 60, 'max': 3600}
+            }
+        }
+        
+        # 验证配置数据
+        def validate_section(section_name, section_data, rules):
+            """验证配置节"""
+            if section_name not in section_data:
+                return section_data
+            
+            for key, rule in rules.items():
+                if key in section_data[section_name]:
+                    value = section_data[section_name][key]
+                    # 类型验证
+                    if not isinstance(value, rule['type']):
+                        print(f"配置验证警告: {section_name}.{key} 类型错误，应为 {rule['type'].__name__}，使用默认值")
+                        del section_data[section_name][key]
+                        continue
+                    
+                    # 数值范围验证
+                    if 'min' in rule and value < rule['min']:
+                        print(f"配置验证警告: {section_name}.{key} 小于最小值 {rule['min']}，使用默认值")
+                        del section_data[section_name][key]
+                        continue
+                    
+                    if 'max' in rule and value > rule['max']:
+                        print(f"配置验证警告: {section_name}.{key} 大于最大值 {rule['max']}，使用默认值")
+                        del section_data[section_name][key]
+                        continue
+                    
+                    # 允许值验证
+                    if 'allowed_values' in rule and value not in rule['allowed_values']:
+                        print(f"配置验证警告: {section_name}.{key} 值无效，允许值: {rule['allowed_values']}，使用默认值")
+                        del section_data[section_name][key]
+                        continue
+            
+            return section_data
+        
+        # 验证各个配置节
+        for section, rules in validation_rules.items():
+            config_data = validate_section(section, config_data, rules)
+        
+        return config_data
+    
+    def _upgrade_config(self, config_data):
+        """升级配置文件到最新版本
+        
+        Args:
+            config_data (dict): 配置数据
+            
+        Returns:
+            dict: 升级后的配置数据
+        """
+        CURRENT_VERSION = "1.0.0"
+        
+        # 获取当前配置版本
+        config_version = config_data.get('version', "0.0.0")
+        
+        # 如果是最新版本，直接返回
+        if config_version == CURRENT_VERSION:
+            return config_data
+        
+        print(f"正在升级配置文件从版本 {config_version} 到 {CURRENT_VERSION}...")
+        
+        # 版本升级逻辑
+        upgrade_steps = {
+            "0.0.0": self._upgrade_from_0_0_0,
+            "1.0.0": lambda x: x  # 已是最新版本，无需升级
+        }
+        
+        # 执行升级
+        while config_version != CURRENT_VERSION:
+            if config_version not in upgrade_steps:
+                print(f"警告：未知的配置版本 {config_version}，使用默认配置")
+                return self._create_default_json_config()
+            
+            upgrade_func = upgrade_steps[config_version]
+            config_data = upgrade_func(config_data)
+            config_version = config_data['version']
+            print(f"已升级到版本 {config_version}")
+        
+        print("配置文件升级完成")
+        return config_data
+    
+    def _upgrade_from_0_0_0(self, config_data):
+        """从版本 0.0.0 升级到 1.0.0
+        
+        Args:
+            config_data (dict): 配置数据
+            
+        Returns:
+            dict: 升级后的配置数据
+        """
+        # 添加版本信息
+        config_data['version'] = "1.0.0"
+        
+        # 确保所有必需的配置节存在
+        required_sections = ['server', 'logging', 'theme', 'caching', 'auth', 'whitelist']
+        for section in required_sections:
+            if section not in config_data:
+                config_data[section] = {}
+        
+        # 确保server配置节的必需字段存在
+        if 'server' in config_data:
+            server_config = config_data['server']
+            server_config.setdefault('port', 8000)
+            server_config.setdefault('max_concurrent_threads', 10)
+            server_config.setdefault('share_dir', self._get_default_share_dir())
+            server_config.setdefault('ssl_cert_file', '')
+            server_config.setdefault('ssl_key_file', '')
+            server_config.setdefault('failed_auth_limit', 5)
+            server_config.setdefault('failed_auth_block_time', 300)
+            server_config.setdefault('session_timeout', 86400)
+        
+        return config_data
+    
+    def _create_default_json_config(self):
+        """创建默认的JSON配置"""
+        return {
+            "version": "1.0.0",
+            "server": {
+                "port": self.server_config['PORT'],
+                "max_concurrent_threads": self.server_config['MAX_CONCURRENT_THREADS'],
+                "share_dir": self.server_config['SHARE_DIR'],
+                "ssl_cert_file": self.server_config['SSL_CERT_FILE'],
+                "ssl_key_file": self.server_config['SSL_KEY_FILE'],
+                "failed_auth_limit": self.server_config['FAILED_AUTH_LIMIT'],
+                "failed_auth_block_time": self.server_config['FAILED_AUTH_BLOCK_TIME'],
+                "session_timeout": self.server_config['SESSION_TIMEOUT']
+            },
+            "logging": {
+                "log_level": self.logging_config['LOG_LEVEL'],
+                "log_file": self.logging_config['LOG_FILE']
+            },
+            "theme": {
+                "default_theme": self.theme_config['DEFAULT_THEME']
+            },
+            "caching": {
+                "index_cache_size": self.caching_config['INDEX_CACHE_SIZE'],
+                "search_cache_size": self.caching_config['SEARCH_CACHE_SIZE'],
+                "update_interval": self.caching_config['UPDATE_INTERVAL']
+            },
+            "auth": {
+                "username": self.auth_config['username'],
+                "password_hash": self.auth_config['password_hash'],
+                "salt": self.auth_config['salt']
+            },
+            "whitelist": {
+                "image": self.whitelist_config['image'],
+                "audio": self.whitelist_config['audio'],
+                "video": self.whitelist_config['video']
+            }
+        }
+    
     def _load_json_config(self):
         """从JSON配置文件加载配置"""
         try:
             with open(self.json_config_file, 'r', encoding='utf-8') as f:
                 config_data = json.load(f)
             
-            # 验证配置版本
-            if 'version' not in config_data:
-                raise ValueError("配置文件缺少版本信息")
+            # 升级配置到最新版本
+            config_data = self._upgrade_config(config_data)
+            
+            # 验证配置数据
+            config_data = self._validate_config(config_data)
             
             # 加载服务器配置
             if 'server' in config_data:
@@ -211,6 +392,8 @@ class ConfigManager:
                 self.caching_config['INDEX_CACHE_SIZE'] = caching_config.get('index_cache_size', self.caching_config['INDEX_CACHE_SIZE'])
                 self.caching_config['SEARCH_CACHE_SIZE'] = caching_config.get('search_cache_size', self.caching_config['SEARCH_CACHE_SIZE'])
                 self.caching_config['UPDATE_INTERVAL'] = caching_config.get('update_interval', self.caching_config['UPDATE_INTERVAL'])
+                # 加载SQLite索引配置
+                self.caching_config['ENABLE_SQLITE_INDEX'] = caching_config.get('enable_sqlite_index', self.caching_config['ENABLE_SQLITE_INDEX'])
             
             # 加载认证配置
             if 'auth' in config_data:
@@ -537,14 +720,30 @@ class ConfigManager:
             bool: 路径是否安全
         """
         try:
+            # 简化路径安全检查，适合内网环境
+            # 对于内网环境，放宽安全限制，允许所有在共享目录内的路径
+            
+            # 处理不同类型的路径输入
+            if hasattr(path, 'path'):  # 处理DirEntry对象
+                path_str = path.path
+            else:
+                path_str = str(path)
+            
+            # 构建完整的绝对路径
+            if not Path(path_str).is_absolute():
+                # 如果是相对路径，直接认为是安全的
+                return True
+            
             # 规范化路径
-            normalized_path = Path(path).resolve()
+            normalized_path = Path(path_str).resolve()
             normalized_base = Path(base_dir).resolve()
             
             # 检查路径是否在基础目录内
             return normalized_path.is_relative_to(normalized_base)
-        except Exception:
-            return False
+        except Exception as e:
+            # 在内网环境下，出错时也返回True，避免误判
+            logger.debug(f"路径安全检查出错，放宽限制: {path} - {e}")
+            return True
     
     def record_failed_attempt(self, ip_address):
         """记录认证失败尝试

@@ -30,8 +30,10 @@
 - **ConfigManager**: 配置管理器，负责加载和保存配置文件，支持配置热重载，管理服务器设置、认证信息、白名单文件类型等
 - **AuthenticationManager**: 身份认证管理器，处理用户登录、会话管理、密码哈希验证和IP封禁逻辑，支持会话持久化和智能会话超时
 - **FileIndexer**: 文件索引器，递归遍历指定目录，生成文件和文件夹索引，支持搜索功能，实现增量索引和异步索引
-- **HTMLTemplate**: HTML模板生成器，生成所有页面的HTML内容，包括护眼模式支持
+- **HTMLTemplate**: HTML模板生成器，生成所有页面的HTML内容，包括护眼模式支持和API文档页面
 - **FileServerHandler**: 文件服务器处理器，继承自BaseHTTPRequestHandler，处理HTTP请求，支持sendfile系统调用优化
+- **APIHandler**: RESTful API处理器，负责处理所有API请求，支持认证、分页、排序和CORS跨域
+- **SearchEngine**: 高级搜索引擎，支持正则表达式和模糊匹配搜索，实现高性能搜索
 - **FileServer**: 文件服务器主类，负责启动和管理服务器实例
 
 ### 2.2 核心模块
@@ -179,7 +181,67 @@ class FileServerHandler(BaseHTTPRequestHandler):
 - 范围请求支持（视频播放）
 - 静态资源处理
 
-#### 2.2.6 FileServer (文件服务器)
+#### 2.2.6 APIHandler (RESTful API处理器)
+
+```python
+class APIHandler:
+    def __init__(self, config_manager, auth_manager, file_indexer):
+        # 初始化API处理器
+    
+    def handle_request(self, path, method, headers, params):
+        # 处理API请求
+    
+    def _send_json_response(self, data, status_code=200):
+        # 发送JSON响应
+    
+    def _handle_api_files(self, params):
+        # 处理文件列表API
+    
+    def _handle_api_search(self, params):
+        # 处理搜索API
+    
+    def _handle_api_download(self, path):
+        # 处理下载API
+```
+
+关键功能：
+- RESTful API路由
+- JSON响应格式化
+- HTTP Basic Authentication支持
+- Session Cookie认证支持
+- CORS跨域支持
+- 分页和排序功能
+- API文档生成
+
+#### 2.2.7 SearchEngine (高级搜索引擎)
+
+```python
+class SearchEngine:
+    def __init__(self, file_indexer):
+        # 初始化搜索引擎
+    
+    def search(self, query, search_type='all', regex=False, page=1, per_page=20):
+        # 执行搜索
+    
+    def _regex_search(self, items, query):
+        # 正则表达式搜索
+    
+    def _fuzzy_search(self, items, query):
+        # 模糊匹配搜索
+    
+    def _highlight_matches(self, text, query):
+        # 高亮显示匹配结果
+```
+
+关键功能：
+- 正则表达式搜索支持
+- 模糊匹配搜索支持
+- 搜索结果高亮
+- 高性能搜索算法
+- 支持文件名和路径搜索
+- 搜索结果分页
+
+#### 2.2.8 FileServer (文件服务器)
 
 ```python
 class FileServer:
@@ -248,6 +310,28 @@ class FileServer:
 |认证配置|auth_config.ini文件，存储用户名、密码哈希和盐值|✅ 已实现|
 |端口自动选择|启动时自动检测可用端口并在8000-9000范围内选择|✅ 已实现|
 |默认配置|首次运行自动生成默认配置文件|✅ 已实现|
+
+### 3.6 RESTful API支持
+
+|功能|实现细节|状态|
+|---|---|---|
+|API端点|完整的RESTful API接口，支持文件、目录、搜索、下载|✅ 已实现|
+|认证方式|支持HTTP Basic Authentication和Session Cookie认证|✅ 已实现|
+|CORS支持|支持跨域请求，可配置允许的域名|✅ 已实现|
+|分页排序|API支持分页和排序功能|✅ 已实现|
+|API文档|自动生成的API文档页面|✅ 已实现|
+|JSON响应|统一的JSON响应格式，包含success、data、error和meta字段|✅ 已实现|
+
+### 3.7 高级搜索功能
+
+|功能|实现细节|状态|
+|---|---|---|
+|正则表达式搜索|支持精确的正则表达式匹配|✅ 已实现|
+|模糊匹配搜索|支持近似字符串匹配，支持编辑距离配置|✅ 已实现|
+|搜索结果高亮|显示匹配的搜索结果高亮|✅ 已实现|
+|高性能搜索|响应时间<300ms（10,000条记录）|✅ 已实现|
+|多维度搜索|支持文件名和路径搜索|✅ 已实现|
+|搜索结果分页|支持搜索结果分页，可配置每页数量|✅ 已实现|
 
 ## 四、技术规范
 
