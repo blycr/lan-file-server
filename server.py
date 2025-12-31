@@ -1356,55 +1356,9 @@ class HTMLTemplate:
             }
         };
         
-        // 导航管理工具类
-        const NavigationManager = {
-            // 初始化导航按钮
-            init() {
-                this.updateButtonVisibility();
-            },
-            
-            // 更新按钮可见性
-            updateButtonVisibility() {
-                const backButton = document.getElementById('back-button');
-                const homeButton = document.getElementById('home-button');
-                
-                if (backButton && homeButton) {
-                    // 获取当前页面路径
-                    const currentPath = window.location.pathname;
-                    
-                    // 检查是否为搜索结果页面
-                    const isSearchPage = currentPath === '/search';
-                    
-                    // 设置可见性：回到上一层按钮在除搜索页面外显示
-                    backButton.style.display = isSearchPage ? 'none' : 'inline-flex';
-                    // 回到首页按钮在所有页面显示
-                    homeButton.style.display = 'inline-flex';
-                }
-            },
-            
-            // 回到上一层功能
-            goBack() {
-                window.history.back();
-            },
-            
-            // 回到首页功能
-            goHome() {
-                window.location.href = '/index';
-            }
-        };
-        
         // 全局主题函数
         function toggleTheme() {
             ThemeManager.toggleTheme();
-        }
-        
-        // 全局导航函数
-        function goBack() {
-            NavigationManager.goBack();
-        }
-        
-        function goHome() {
-            NavigationManager.goHome();
         }
         
         // 立即应用主题（在DOM加载前）
@@ -1413,13 +1367,11 @@ class HTMLTemplate:
         // DOM加载完成后初始化
         document.addEventListener('DOMContentLoaded', function() {
             ThemeManager.forceApplyTheme();
-            NavigationManager.init();
         });
         
         // 页面加载完成后的最终保障
         window.addEventListener('load', function() {
             ThemeManager.forceApplyTheme();
-            NavigationManager.init();
         });
     </script>"""
     
@@ -1500,12 +1452,6 @@ class HTMLTemplate:
     </header>
     
     <main class="main-content glass-container">
-        <!-- 导航按钮 -->
-        <div class="navigation-buttons">
-            <button id="back-button" class="nav-button" onclick="goBack()" title="回到上一层">⬅️ 回到上一层</button>
-            <button id="home-button" class="nav-button" onclick="goHome()" title="回到首页">🏠 回到首页</button>
-        </div>
-        
         {content}
     </main>
     
