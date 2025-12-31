@@ -170,7 +170,7 @@ lan-file-server/
 ## 使用说明
 
 1. **访问服务器**
-   - 打开浏览器访问 `http://localhost:8000`
+   - 打开浏览器访问 `https://localhost:8000`
    - 输入配置的用户名和密码
 
 2. **浏览文件**
@@ -183,7 +183,7 @@ lan-file-server/
    - 界面会自动适配移动设备
 
 4. **使用API**
-   - 访问 `http://localhost:8000/api` 查看API文档
+   - 访问 `https://localhost:8000/api` 查看API文档
    - 使用HTTP Basic Authentication或Session Cookie进行认证
    - 支持CORS跨域请求
 
@@ -240,13 +240,13 @@ lan-file-server/
 
 ```bash
 # 使用HTTP Basic Authentication获取文件列表
-curl -u username:password http://localhost:8000/api/files?page=1&per_page=20&sort_by=modified_time&sort_order=desc
+curl -u username:password https://localhost:8000/api/files?page=1&per_page=20&sort_by=modified_time&sort_order=desc
 
 # 搜索文件
-curl -u username:password http://localhost:8000/api/search?q=test&type=file
+curl -u username:password https://localhost:8000/api/search?q=test&type=file
 
-# 使用正则表达式搜索
-curl -u username:password http://localhost:8000/api/search?q=.*test.*&type=file&regex=true
+# 使用正则表达式搜索文件
+curl -u username:password https://localhost:8000/api/search?q=.*test.*&type=file&regex=true
 ```
 
 ## 开发信息

@@ -88,7 +88,7 @@ failed_auth_block_time = 300
 ## 使用说明
 
 1. **访问服务器**
-   - 打开浏览器访问 `http://localhost:8000`
+   - 打开浏览器访问 `https://localhost:8000`
    - 输入配置的用户名和密码
 
 2. **浏览文件**
