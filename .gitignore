@@ -125,3 +125,11 @@ credentials/
 
 # 无关脚本
 update_wiki.py
+
+# 其他无关文件
+wiki/
+test/
+OPTIMIZATION_IMPROVEMENT_DIRECTIONS.md
+lan-file-server-technical-requirements-revised.md
+ssl_cert.pem
+ssl_key.pem
