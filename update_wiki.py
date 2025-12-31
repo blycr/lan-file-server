@@ -77,17 +77,26 @@ class WikiUpdater:
             cmd (list): Git命令参数
             cwd (str): 工作目录
         
+        Returns:
+            subprocess.CompletedProcess: 命令执行结果
+        
         Raises:
             subprocess.CalledProcessError: 如果命令执行失败
         """
         logger.debug(f"执行Git命令: {' '.join(cmd)} (cwd: {cwd})")
-        subprocess.run(
+        result = subprocess.run(
             cmd,
             cwd=cwd,
-            check=True,
+            check=False,
             capture_output=True,
             text=True
         )
+        if result.returncode != 0:
+            logger.error(f"Git命令失败: {' '.join(cmd)}")
+            logger.error(f"stdout: {result.stdout}")
+            logger.error(f"stderr: {result.stderr}")
+            raise subprocess.CalledProcessError(result.returncode, cmd, output=result.stdout, stderr=result.stderr)
+        return result
     
     def _copy_wiki_content(self):
         """复制本地wiki文件夹内容到Wiki仓库"""
@@ -115,14 +124,19 @@ class WikiUpdater:
         self._copy_wiki_content()
         
         # 检查是否有更改
-        try:
-            self._run_git_command(["git", "status", "--porcelain"], cwd=self.temp_dir)
-        except subprocess.CalledProcessError as e:
-            logger.error(f"检查Git状态失败: {e}")
-            return False
+        status_result = self._run_git_command(["git", "status", "--porcelain"], cwd=self.temp_dir)
+        if not status_result.stdout.strip():
+            logger.info("没有检测到Wiki内容更改，跳过提交")
+            return True
         
         # 添加所有更改
         self._run_git_command(["git", "add", "."], cwd=self.temp_dir)
+        
+        # 再次检查状态，确保有更改要提交
+        status_result = self._run_git_command(["git", "status"], cwd=self.temp_dir)
+        if "nothing to commit, working tree clean" in status_result.stdout:
+            logger.info("工作树已干净，没有需要提交的更改")
+            return True
         
         # 提交更改
         commit_message = "Update Wiki content from local wiki folder"
