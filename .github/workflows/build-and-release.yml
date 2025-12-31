@@ -51,14 +51,14 @@ jobs:
       - name: Create PyInstaller spec file
         run: |
           echo "Creating PyInstaller spec file..."
-          pyinstaller --name "LANFileServer" \
-                     --onefile \
-                     --windowed \
-                     --add-data "static;static" \
-                     --icon=none \
-                     --hidden-import=config \
-                     --hidden-import=color_logger \
-                     --exclude-module=tkinter \
+          pyinstaller --name "LANFileServer" `
+                     --onefile `
+                     --windowed `
+                     --add-data "static;static" `
+                     --icon=none `
+                     --hidden-import=config `
+                     --hidden-import=color_logger `
+                     --exclude-module=tkinter `
                      server.py
       
       # 6. 构建exe文件
