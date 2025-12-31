@@ -1705,14 +1705,14 @@ class HTMLTemplate:
             
             for i, part in enumerate(path_parts):
                 accumulated_path += part + '/' if i < len(path_parts) - 1 else part
-                path_breadcrumbs += f' / <a href="/browse/{urlquote(accumulated_path, encoding='utf-8', safe='')}">{part}</a>'
+                path_breadcrumbs += f" / <a href='/browse/{urlquote(accumulated_path, encoding="utf-8", safe="")}'>{part}</a>"
         else:
             path_breadcrumbs = '<span>首页</span>'
         
         # 返回按钮
         back_button = ""
         if current_path:
-            back_url = "/browse/" + urlquote(parent_path, encoding='utf-8', safe='') if parent_path else "/index"
+            back_url = "/browse/" + urlquote(parent_path, encoding="utf-8", safe="") if parent_path else "/index"
             back_button = f'<a href="{back_url}" class="back-button">⬅️ 返回上一层</a>'
         
         # 统计信息
