@@ -30,9 +30,6 @@ sessions.json
 *.md
 !README.md
 
-# Wiki目录
-wiki/
-
 # 凭据和密钥文件
 *.key
 *.pem
@@ -123,8 +120,7 @@ private/
 secrets/
 credentials/
 
-# Wiki files (GitHub wiki should not be in main repository)
-wiki/
+
 
 # Backup files
 *.backup
