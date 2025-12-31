@@ -109,7 +109,7 @@ class WikiUpdater:
         """更新Wiki仓库"""
         # 克隆Wiki仓库到临时目录
         logger.info(f"克隆Wiki仓库: {self.wiki_url}")
-        self._run_git_command(["git", "clone", self.wiki_url, self.temp_dir])
+        self._run_git_command(["git", "clone", self.wiki_url, str(self.temp_dir)])
         
         # 复制本地内容
         self._copy_wiki_content()
