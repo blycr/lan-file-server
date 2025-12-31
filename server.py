@@ -1956,25 +1956,33 @@ class FileServerHandler(BaseHTTPRequestHandler):
         query_params = parse_qs(parsed_url.query)
         
         # 检查是否需要HTTPS重定向
-        # 通过请求头中的X-Forwarded-Proto判断是否为HTTPS
-        is_https = self.headers.get('X-Forwarded-Proto') == 'https' or hasattr(self.connection, 'getpeername')
-        # 或者通过服务器是否使用SSL判断
-        use_https = hasattr(self.server.socket, 'getpeername')
+        # 获取SSL启用状态
+        ssl_enabled = self.config_manager.server_config.get('SSL_ENABLED', True)
         
-        if use_https and not is_https:
-            # 重定向到HTTPS
-            host = self.headers.get('Host')
-            if host:
-                # 确保使用443端口（或配置的HTTPS端口）
-                # 这里简化处理，直接将HTTP请求重定向到HTTPS
-                ssl_port = self.config_manager.server_config.get('SSL_PORT', 443)
-                host_parts = host.split(':')
-                if len(host_parts) > 1:
-                    # 保留原始主机名，替换端口
-                    redirect_host = f"{host_parts[0]}:{ssl_port}"
-                else:
-                    # 使用默认HTTPS端口
-                    redirect_host = host
+        # 只有在SSL启用时才进行重定向检查
+        if ssl_enabled:
+            # 通过请求头中的X-Forwarded-Proto判断是否为HTTPS
+            is_https = self.headers.get('X-Forwarded-Proto') == 'https'
+            # 通过服务器socket是否使用SSL判断
+            server_uses_ssl = hasattr(self.server.socket, 'version') or hasattr(self.server.socket, 'cipher')
+            
+            # 修正重定向逻辑：只有当服务器使用SSL且请求不是HTTPS时才重定向
+            if server_uses_ssl and not is_https:
+                # 重定向到HTTPS
+                host = self.headers.get('Host')
+                if host:
+                    # 保留原始端口或使用配置的HTTPS端口
+                    ssl_port = self.config_manager.server_config.get('SSL_PORT')
+                    host_parts = host.split(':')
+                    if ssl_port:
+                        # 使用配置的HTTPS端口
+                        redirect_host = f"{host_parts[0]}:{ssl_port}"
+                    elif len(host_parts) > 1:
+                        # 保留原始端口
+                        redirect_host = host
+                    else:
+                        # 使用默认HTTPS端口
+                        redirect_host = f"{host_parts[0]}:{self.config_manager.server_config.get('PORT', 8000)}"
                 
                 redirect_url = f"https://{redirect_host}{self.path}"
                 self.send_response(301)
@@ -2934,15 +2942,27 @@ class FileServerHandler(BaseHTTPRequestHandler):
                 # 设置Content-Range头
                 content_range = f"bytes {range_info['start']}-{range_end}/{file_size}"
                 self.send_header('Content-Range', content_range)
-                # 设置Content-Length为实际发送的数据长度
-                content_length = range_end - range_info['start'] + 1
-                self.send_header('Content-Length', str(content_length))
+                
+                # 对于视频文件，使用chunked传输编码，不设置Content-Length
+                if content_type.startswith('video/'):
+                    # 视频文件使用chunked传输编码
+                    self.send_header('Transfer-Encoding', 'chunked')
+                else:
+                    # 其他文件设置Content-Length
+                    content_length = range_end - range_info['start'] + 1
+                    self.send_header('Content-Length', str(content_length))
             else:
                 # 正常请求返回200状态码
                 self.send_response(200)
-                # 大文件不设置Content-Length，让浏览器自动检测
-                if file_size < 100 * 1024 * 1024:  # 小于100MB的文件才设置Content-Length
-                    self.send_header('Content-Length', str(file_size))
+                
+                # 根据文件类型设置传输方式
+                if content_type.startswith('video/'):
+                    # 视频文件使用chunked传输编码
+                    self.send_header('Transfer-Encoding', 'chunked')
+                else:
+                    # 其他文件根据大小设置Content-Length
+                    if file_size < 100 * 1024 * 1024:  # 小于100MB的文件才设置Content-Length
+                        self.send_header('Content-Length', str(file_size))
             
             # 设置Content-Type
             self.send_header('Content-Type', content_type)
@@ -2959,7 +2979,25 @@ class FileServerHandler(BaseHTTPRequestHandler):
             # 支持Range请求，允许视频流播放
             if content_type.startswith('video/') or content_type.startswith('audio/'):
                 self.send_header('Accept-Ranges', 'bytes')
-                self.send_header('Cache-Control', 'no-cache')
+                # 优化视频播放的缓存控制
+                self.send_header('Cache-Control', 'public, max-age=3600, must-revalidate')
+                # 添加视频流优化头
+                self.send_header('Content-Type', content_type)
+                # 允许跨域请求，解决某些浏览器的CORS问题
+                self.send_header('Access-Control-Allow-Origin', '*')
+                # 添加视频播放优化头
+                self.send_header('X-Content-Type-Options', 'nosniff')
+                self.send_header('X-Frame-Options', 'SAMEORIGIN')
+                # 优化视频缓冲区管理
+                self.send_header('Transfer-Encoding', 'chunked')
+                # 预加载机制：对于视频文件，设置适当的预加载大小
+                if content_type.startswith('video/'):
+                    # 对于视频文件，添加更多优化头
+                    self.send_header('X-Accel-Buffering', 'no')
+                    self.send_header('X-Player-Buffer', 'auto')
+                    # 实现自适应比特率支持
+                    self.send_header('Accept-CH', 'DPR, Width, Viewport-Width')
+                    self.send_header('Vary', 'Accept-Encoding, Origin')
             elif is_inline:
                 # 设置缓存控制头
                 self.send_header('Cache-Control', 'public, max-age=3600')
@@ -3038,6 +3076,23 @@ class FileServerHandler(BaseHTTPRequestHandler):
         try:
             file_size = os.path.getsize(file_path)
             
+            # 获取文件类型
+            content_type = mimetypes.guess_type(file_path)[0] or 'application/octet-stream'
+            
+            # 根据文件类型调整传输参数
+            if content_type.startswith('video/'):
+                # 视频文件使用更大的块大小，提高传输效率
+                chunk_size = 65536  # 64KB块
+                preload_size = 1024 * 1024  # 1MB预加载
+            elif content_type.startswith('audio/'):
+                # 音频文件使用中等块大小
+                chunk_size = 32768  # 32KB块
+                preload_size = 512 * 1024  # 512KB预加载
+            else:
+                # 其他文件使用默认块大小
+                chunk_size = 8192  # 8KB块
+                preload_size = 0  # 不预加载
+            
             # 尝试使用sendfile系统调用优化传输
             if hasattr(os, 'sendfile') and not range_info:
                 # 只在非Range请求时使用sendfile
@@ -3051,8 +3106,9 @@ class FileServerHandler(BaseHTTPRequestHandler):
                         # 使用sendfile系统调用传输文件
                         sent = 0
                         while sent < file_size:
-                            # 每次发送最多1MB
-                            sent_bytes = os.sendfile(dst_fd, src_fd, sent, min(1024 * 1024, file_size - sent))
+                            # 根据文件类型调整sendfile块大小
+                            sendfile_chunk = min(chunk_size * 16, file_size - sent)  # 最多1MB per sendfile call
+                            sent_bytes = os.sendfile(dst_fd, src_fd, sent, sendfile_chunk)
                             if sent_bytes == 0:  # 文件传输完成
                                 break
                             sent += sent_bytes
@@ -3071,29 +3127,61 @@ class FileServerHandler(BaseHTTPRequestHandler):
                     if end is None:
                         # 范围请求的结尾未指定，读取到文件末尾
                         f.seek(start)
+                        
+                        # 实现预加载机制：对于视频文件，提前加载一部分内容
+                        if content_type.startswith('video/') or content_type.startswith('audio/'):
+                            # 预加载一定大小的数据
+                            preload_data = f.read(preload_size)
+                            if preload_data:
+                                self.wfile.write(preload_data)
+                                self.wfile.flush()
+                        
+                        # 继续传输剩余内容
                         while True:
-                            chunk = f.read(8192)  # 8KB块
+                            chunk = f.read(chunk_size)
                             if not chunk:
                                 break
                             self.wfile.write(chunk)
+                            self.wfile.flush()
                     else:
                         # 指定的范围
                         end = min(end, file_size - 1)  # 确保不超过文件大小
                         
                         f.seek(start)
                         remaining = end - start + 1
+                        
+                        # 实现预加载机制：对于视频文件，提前加载一部分内容
+                        if (content_type.startswith('video/') or content_type.startswith('audio/')) and remaining > preload_size:
+                            # 预加载一定大小的数据
+                            preload_data = f.read(preload_size)
+                            if preload_data:
+                                self.wfile.write(preload_data)
+                                self.wfile.flush()
+                                remaining -= len(preload_data)
+                        
+                        # 继续传输剩余内容
                         while remaining > 0:
-                            chunk_size = min(8192, remaining)
-                            chunk = f.read(chunk_size)
+                            current_chunk = min(chunk_size, remaining)
+                            chunk = f.read(current_chunk)
                             if not chunk:
                                 break
                             self.wfile.write(chunk)
+                            self.wfile.flush()
                             remaining -= len(chunk)
                 else:
                     # 正常请求：根据文件大小决定传输方式
                     if file_size >= 100 * 1024 * 1024:  # 大文件流式传输
+                        # 实现预加载机制
+                        if content_type.startswith('video/') or content_type.startswith('audio/'):
+                            # 预加载一定大小的数据
+                            preload_data = f.read(preload_size)
+                            if preload_data:
+                                self.wfile.write(preload_data)
+                                self.wfile.flush()
+                        
+                        # 继续传输剩余内容
                         while True:
-                            chunk = f.read(8192)  # 8KB块
+                            chunk = f.read(chunk_size)
                             if not chunk:
                                 break
                             self.wfile.write(chunk)
@@ -3405,44 +3493,55 @@ class FileServer:
             def create_handler(*args, **kwargs):
                 return FileServerHandler(*args, config_manager=self.config_manager, **kwargs)
             
-            # 检查是否配置了SSL证书和密钥
-            ssl_cert_file = self.config_manager.server_config.get('SSL_CERT_FILE', '')
-            ssl_key_file = self.config_manager.server_config.get('SSL_KEY_FILE', '')
+            # 检查是否启用SSL
+            ssl_enabled = self.config_manager.server_config.get('SSL_ENABLED', True)
             
-            # 尝试生成自签名证书（如果没有配置证书）
-            if not ssl_cert_file or not ssl_key_file or not Path(ssl_cert_file).exists() or not Path(ssl_key_file).exists():
-                logger.info("没有找到SSL证书，尝试生成自签名证书...")
-                # 生成默认的证书和密钥文件路径
-                default_cert_file = str(Path('.') / 'ssl_cert.pem')
-                default_key_file = str(Path('.') / 'ssl_key.pem')
+            if ssl_enabled:
+                # SSL启用时的逻辑
+                # 检查是否配置了SSL证书和密钥
+                ssl_cert_file = self.config_manager.server_config.get('SSL_CERT_FILE', '')
+                ssl_key_file = self.config_manager.server_config.get('SSL_KEY_FILE', '')
                 
-                # 更新配置
-                self.config_manager.server_config['SSL_CERT_FILE'] = default_cert_file
-                self.config_manager.server_config['SSL_KEY_FILE'] = default_key_file
+                # 尝试生成自签名证书（如果没有配置证书）
+                if not ssl_cert_file or not ssl_key_file or not Path(ssl_cert_file).exists() or not Path(ssl_key_file).exists():
+                    logger.info("没有找到SSL证书，尝试生成自签名证书...")
+                    # 生成默认的证书和密钥文件路径
+                    default_cert_file = str(Path('.') / 'ssl_cert.pem')
+                    default_key_file = str(Path('.') / 'ssl_key.pem')
+                    
+                    # 更新配置
+                    self.config_manager.server_config['SSL_CERT_FILE'] = default_cert_file
+                    self.config_manager.server_config['SSL_KEY_FILE'] = default_key_file
+                    
+                    # 生成自签名证书
+                    self._generate_self_signed_cert(default_cert_file, default_key_file)
+                    
+                    # 重新检查证书和密钥
+                    ssl_cert_file = default_cert_file
+                    ssl_key_file = default_key_file
                 
-                # 生成自签名证书
-                self._generate_self_signed_cert(default_cert_file, default_key_file)
+                # 检查证书和密钥是否存在
+                use_https = ssl_cert_file and ssl_key_file and Path(ssl_cert_file).exists() and Path(ssl_key_file).exists()
                 
-                # 重新检查证书和密钥
-                ssl_cert_file = default_cert_file
-                ssl_key_file = default_key_file
-            
-            # 检查证书和密钥是否存在
-            use_https = ssl_cert_file and ssl_key_file and Path(ssl_cert_file).exists() and Path(ssl_key_file).exists()
-            
-            if use_https:
-                # 使用HTTPS服务器
-                import ssl
-                
-                context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-                context.load_cert_chain(ssl_cert_file, ssl_key_file)
-                
-                self.server = HTTPServer(('0.0.0.0', port), create_handler)
-                self.server.socket = context.wrap_socket(self.server.socket, server_side=True)
-                
-                protocol = "https"
+                if use_https:
+                    # 使用HTTPS服务器
+                    import ssl
+                    
+                    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+                    context.load_cert_chain(ssl_cert_file, ssl_key_file)
+                    
+                    self.server = HTTPServer(('0.0.0.0', port), create_handler)
+                    self.server.socket = context.wrap_socket(self.server.socket, server_side=True)
+                    
+                    protocol = "https"
+                else:
+                    # 证书不存在，回退到HTTP
+                    logger.warning("SSL证书或密钥不存在，回退到HTTP模式")
+                    self.server = HTTPServer(('0.0.0.0', port), create_handler)
+                    protocol = "http"
             else:
-                # 使用普通HTTP服务器
+                # SSL禁用时，直接使用HTTP服务器
+                logger.info("SSL已禁用，使用HTTP服务器")
                 self.server = HTTPServer(('0.0.0.0', port), create_handler)
                 protocol = "http"
             

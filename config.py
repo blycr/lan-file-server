@@ -49,6 +49,7 @@ class ConfigManager:
             'PORT': 8000,
             'MAX_CONCURRENT_THREADS': 10,
             'SHARE_DIR': self._get_default_share_dir(),
+            'SSL_ENABLED': True,
             'SSL_CERT_FILE': '',
             'SSL_KEY_FILE': '',
             'FAILED_AUTH_LIMIT': 5,
@@ -321,6 +322,7 @@ class ConfigManager:
                 "port": self.server_config['PORT'],
                 "max_concurrent_threads": self.server_config['MAX_CONCURRENT_THREADS'],
                 "share_dir": self.server_config['SHARE_DIR'],
+                "ssl_enabled": self.server_config['SSL_ENABLED'],
                 "ssl_cert_file": self.server_config['SSL_CERT_FILE'],
                 "ssl_key_file": self.server_config['SSL_KEY_FILE'],
                 "failed_auth_limit": self.server_config['FAILED_AUTH_LIMIT'],
@@ -369,6 +371,7 @@ class ConfigManager:
                 self.server_config['PORT'] = server_config.get('port', self.server_config['PORT'])
                 self.server_config['MAX_CONCURRENT_THREADS'] = server_config.get('max_concurrent_threads', self.server_config['MAX_CONCURRENT_THREADS'])
                 self.server_config['SHARE_DIR'] = server_config.get('share_dir', self.server_config['SHARE_DIR'])
+                self.server_config['SSL_ENABLED'] = server_config.get('ssl_enabled', self.server_config['SSL_ENABLED'])
                 self.server_config['SSL_CERT_FILE'] = server_config.get('ssl_cert_file', self.server_config['SSL_CERT_FILE'])
                 self.server_config['SSL_KEY_FILE'] = server_config.get('ssl_key_file', self.server_config['SSL_KEY_FILE'])
                 self.server_config['FAILED_AUTH_LIMIT'] = server_config.get('failed_auth_limit', self.server_config['FAILED_AUTH_LIMIT'])
@@ -438,6 +441,7 @@ class ConfigManager:
                     "port": self.server_config['PORT'],
                     "max_concurrent_threads": self.server_config['MAX_CONCURRENT_THREADS'],
                     "share_dir": self.server_config['SHARE_DIR'],
+                    "ssl_enabled": self.server_config['SSL_ENABLED'],
                     "ssl_cert_file": self.server_config['SSL_CERT_FILE'],
                     "ssl_key_file": self.server_config['SSL_KEY_FILE'],
                     "failed_auth_limit": self.server_config['FAILED_AUTH_LIMIT'],

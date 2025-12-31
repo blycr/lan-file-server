@@ -29,7 +29,7 @@ python server.py
 
 ## 详细文档
 
-请查看项目的[Wiki文档](https://github.com/your-username/lan-file-server/wiki)获取完整的：
+请查看项目的[Wiki文档](https://github.com/blycr/lan-file-server.wiki.git)获取完整的：
 - 快速开始指南
 - 配置说明
 - 使用指南
