@@ -125,7 +125,6 @@ jobs:
           name: build-logs
           path: |
             dist/
-            LANFileServer.spec
           retention-days: 7
 
   # 12. 部署文档（可选）
@@ -141,30 +140,3 @@ jobs:
         run: |
           echo "Documentation deployment would happen here"
           # 这里可以添加文档部署步骤，如部署到GitHub Pages
-
-# 13. 工作流状态通知（可选）
-# 可以添加通知步骤，如发送Slack消息或邮件通知
-# - name: Send notification
-#   if: always()
-#   uses: 8398a7/action-slack@v3
-#   with:
-#     status: ${{ job.status }}
-#     fields: repo,message,commit,author,action,eventName,ref,workflow,job
-#   env:
-#     SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-
-# 14. 构建矩阵测试（可选）
-# 可以添加多版本Python和多平台测试
-# strategy:
-#   matrix:
-#     python-version: [3.8, 3.9, 3.10, 3.11]
-#     architecture: [x64, x86]
-
-# 15. 缓存依赖（可选）
-# - name: Cache dependencies
-#   uses: actions/cache@v4
-#   with:
-#     path: ~\AppData\Local\pip\Cache
-#     key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
-#     restore-keys: |
-#       ${{ runner.os }}-pip-
