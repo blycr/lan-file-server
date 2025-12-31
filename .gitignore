@@ -30,6 +30,9 @@ sessions.json
 *.md
 !README.md
 
+# Wiki目录
+wiki/
+
 # 凭据和密钥文件
 *.key
 *.pem
@@ -119,18 +122,6 @@ Thumbs.db
 private/
 secrets/
 credentials/
-
-
-
-# Backup files
-*.backup
-*.bak
-*~
-
-# Zip files
-*.zip
-*.7z
-*.rar
 
 # PowerShell输出
 *.out
