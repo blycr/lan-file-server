@@ -49,7 +49,7 @@ class ConfigManager:
             'PORT': 8000,
             'MAX_CONCURRENT_THREADS': 10,
             'SHARE_DIR': self._get_default_share_dir(),
-            'SSL_ENABLED': True,
+            'SSL_ENABLED': False,
             'SSL_CERT_FILE': '',
             'SSL_KEY_FILE': '',
             'FAILED_AUTH_LIMIT': 5,
