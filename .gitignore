@@ -120,17 +120,5 @@ private/
 secrets/
 credentials/
 
-
-
-# Backup files
-*.backup
-*.bak
-*~
-
-# Zip files
-*.zip
-*.7z
-*.rar
-
 # PowerShell输出
 *.out
