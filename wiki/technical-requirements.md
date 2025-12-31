@@ -164,8 +164,7 @@ class FileServerHandler(BaseHTTPRequestHandler):
 lan-file-server/
 ├── server.py                    # 主服务器文件
 ├── config.py                    # 配置管理模块
-├── auth_config.ini              # 认证配置（用户生成）
-├── server_config.ini            # 服务器配置（用户生成）
+├── config.json                  # 配置文件（用户生成）
 ├── lan-file-server-launcher.ps1 # 集成启动脚本
 ├── initialize-server.ps1        # 初始化服务器脚本
 ├── README.md                    # 项目说明
