@@ -1400,6 +1400,17 @@ class HTMLTemplate:
             ThemeManager.toggleTheme();
         }
         
+        // h1标题点击事件处理函数
+        function handleTitleClick() {
+            // 检查用户是否已登录 - 通过检查是否存在登出按钮来判断
+            const logoutButton = document.querySelector('.logout-button');
+            if (logoutButton) {
+                // 用户已登录，跳转到首页
+                window.location.href = '/index';
+            }
+            // 用户未登录，不执行任何操作
+        }
+        
         // 立即应用主题（在DOM加载前）
         ThemeManager.forceApplyTheme();
         
@@ -1482,7 +1493,7 @@ class HTMLTemplate:
 <body>
     <header class="header glass-effect">
         <div class="header-left">
-            <h1 class="title">LAN文件服务器</h1>
+            <h1 class="title" id="site-title" onclick="handleTitleClick()">LAN文件服务器</h1>
         </div>
         <div class="header-right">
             <button id="theme-toggle" class="theme-toggle" onclick="toggleTheme()" title="切换主题">🌙</button>
@@ -1565,40 +1576,17 @@ class HTMLTemplate:
         </div>
         """
         
-        # 统计信息
+        # 统计信息 - 仅显示文件夹数量
         total_dirs = len(index_data['directories'])
-        total_files = len(index_data['files'])
-        stats_html = f'<div class="stats">找到 {total_dirs} 个文件夹，{total_files} 个文件</div>'
+        stats_html = f'<div class="stats">找到 {total_dirs} 个文件夹</div>'
         
-        # 排序选择器
-        # 添加排序状态视觉指示
-        sort_indicator = {
-            'name': '名称',
-            'size': '大小',
-            'modified': '修改时间',
-            'type': '文件类型'
-        }.get(sort_by, '名称')
-        
-        order_indicator = '↑' if sort_order == 'asc' else '↓'
-        
-        sort_html = f"""
-        <div class="sort-container">
-            <div class="sort-label">排序方式:</div>
-            <div class="sort-status" title="当前排序">
-                <span class="sort-field">{sort_indicator}</span>
-                <span class="sort-order">{order_indicator}</span>
-            </div>
-            <div class="sort-options">
-                <select id="sort_by" onchange="changeSort()" aria-label="排序字段">
-                    <option value="name" {'selected' if sort_by == 'name' else ''}>名称</option>
-                    <option value="size" {'selected' if sort_by == 'size' else ''}>大小</option>
-                    <option value="modified" {'selected' if sort_by == 'modified' else ''}>修改时间</option>
-                    <option value="type" {'selected' if sort_by == 'type' else ''}>文件类型</option>
-                </select>
-                <select id="sort_order" onchange="changeSort()" aria-label="排序顺序">
-                    <option value="asc" {'selected' if sort_order == 'asc' else ''}>升序</option>
-                    <option value="desc" {'selected' if sort_order == 'desc' else ''}>降序</option>
-                </select>
+        # 添加文件类型过滤功能
+        filter_html = f"""
+        <div class="filter-container">
+            <div class="filter-label">过滤类型:</div>
+            <div class="filter-options">
+                <button class="filter-button active" data-filter="all" onclick="filterFiles('all')">全部</button>
+                <button class="filter-button" data-filter="folders" onclick="filterFiles('folders')">文件夹</button>
             </div>
         </div>
         """
@@ -1625,7 +1613,7 @@ class HTMLTemplate:
             </div>
             """
         
-        # 文件列表
+        # 主页不显示文件列表
         files_html = ""
         if index_data['files']:
             files_html = """
@@ -1656,9 +1644,9 @@ class HTMLTemplate:
             </div>
             """
         
-        # 无结果提示
+        # 无结果提示 - 仅检查文件夹数量
         no_results_html = ""
-        if total_dirs == 0 and total_files == 0:
+        if total_dirs == 0:
             no_results_html = '<div class="no-results">未找到匹配的内容</div>'
         
         content = f"""
@@ -1676,7 +1664,7 @@ class HTMLTemplate:
             
             <div class="files-content glass-card">
                 {stats_html}
-                {sort_html}
+                {filter_html}
                 {directories_html}
                 {files_html}
                 {no_results_html}
@@ -1686,37 +1674,57 @@ class HTMLTemplate:
         
         title = f"文件索引 - LAN文件服务器"
         
-        # 添加搜索管理和排序功能的JavaScript
+        # 添加搜索管理和文件过滤功能的JavaScript
         content += f"""
         {HTMLTemplate._get_search_management_js()}
         <script>
             // 初始化搜索功能
-            document.addEventListener('DOMContentLoaded', function() {{
+            document.addEventListener('DOMContentLoaded', function() {{ 
                 SearchManager.initSearch();
             }});
             
-            // 排序功能
-            function changeSort() {{
-                const sortBy = document.getElementById('sort_by').value;
-                const sortOrder = document.getElementById('sort_order').value;
+            // 文件类型过滤功能
+            function filterFiles(filterType) {
+                // 更新按钮状态
+                const buttons = document.querySelectorAll('.filter-button');
+                buttons.forEach(button => button.classList.remove('active'));
+                document.querySelector(`[data-filter="${filterType}"]`).classList.add('active');
                 
-                // 获取当前URL路径
-                const currentUrl = window.location.href;
-                const url = new URL(currentUrl);
+                // 获取所有文件和文件夹项
+                const fileItems = document.querySelectorAll('.file-item');
                 
-                // 更新查询参数
-                url.searchParams.set('sort_by', sortBy);
-                url.searchParams.set('sort_order', sortOrder);
+                // 根据过滤类型显示或隐藏项目
+                fileItems.forEach(item => {
+                    const isDir = item.classList.contains('directory');
+                    
+                    let showItem = false;
+                    
+                    switch (filterType) {
+                        case 'all':
+                            showItem = true;
+                            break;
+                        case 'folders':
+                            showItem = isDir;
+                            break;
+                    }
+                    
+                    item.style.display = showItem ? 'flex' : 'none';
+                });
                 
-                // 保留搜索参数
-                const searchInput = document.getElementById('search-input');
-                if (searchInput && searchInput.value.trim()) {{
-                    url.searchParams.set('q', encodeURIComponent(searchInput.value.trim()));
-                }}
-                
-                // 重新加载页面
-                window.location.href = url.toString();
-            }}
+                // 显示或隐藏空文件夹/文件列表
+                const sections = document.querySelectorAll('.section');
+                sections.forEach(section => {
+                    const list = section.querySelector('.file-list');
+                    const items = list.querySelectorAll('.file-item');
+                    const visibleItems = Array.from(items).filter(item => item.style.display !== 'none');
+                    
+                    if (visibleItems.length === 0) {
+                        list.style.display = 'none';
+                    } else {
+                        list.style.display = 'block';
+                    }
+                });
+            }
         </script>
         """
         
@@ -1748,11 +1756,8 @@ class HTMLTemplate:
         else:
             path_breadcrumbs = '<span>首页</span>'
         
-        # 返回按钮
+        # 移除返回按钮
         back_button = ""
-        if current_path:
-            back_url = "/browse/" + urlquote(parent_path, encoding='utf-8', safe='') if parent_path else "/index"
-            back_button = f'<a href="{back_url}" class="back-button">⬅️ 返回上一层</a>'
         
         # 统计信息
         total_dirs = len(listing_data['directories'])

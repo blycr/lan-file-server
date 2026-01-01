@@ -300,6 +300,7 @@ body {
     padding: var(--spacing-sm);
   box-shadow: var(--shadow-md);
   transition: all var(--transition-time) ease;
+  border: none;
 }
 
 /* ==================== 页面容器 ==================== */
@@ -326,7 +327,7 @@ body {
 /* 头部区域布局 */
 .header-section {
   width: 100%;
-  margin-bottom: var(--spacing-lg);
+  margin-bottom: var(--spacing-md);
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -335,7 +336,7 @@ body {
 /* 页面标题区域 */
 .page-header {
   text-align: center;
-  margin-bottom: var(--spacing-lg);
+  margin-bottom: var(--spacing-md);
   width: 100%;
   max-width: 100%;
 }
@@ -344,7 +345,7 @@ body {
   font-size: 2rem;
   font-weight: 600;
   color: var(--text-primary);
-  margin-bottom: var(--spacing-sm);
+  margin-bottom: var(--spacing-xs);
   word-wrap: break-word;
   line-height: 1.2;
 }
@@ -452,11 +453,11 @@ body {
 .index-toolbar {
   display: flex;
   justify-content: center;
-  margin-bottom: var(--spacing-lg);
-  padding: var(--spacing-md);
+  margin-bottom: var(--spacing-md);
+  padding: var(--spacing-sm);
   background: var(--bg-secondary);
   border-radius: var(--border-radius-md);
-  border: 1px solid var(--border-color-light);
+  border: 0.5px solid var(--border-color-light);
 }
 
 @media (min-width: 768px) {
@@ -468,7 +469,7 @@ body {
 .search-input {
   flex: 1;
   padding: var(--spacing-md);
-  border: 1px solid var(--border-color);
+  border: 0.5px solid var(--border-color);
   border-radius: var(--border-radius-md);
   background: var(--input-bg);
   color: var(--text-primary);
@@ -529,24 +530,23 @@ body {
   border-radius: var(--border-radius-sm);
   border: 1px solid var(--border-color-light);
   white-space: nowrap;
-  margin-bottom: var(--spacing-md);
+  margin-bottom: var(--spacing-sm);
 }
 
-/* ==================== 排序选择器样式 ==================== */
-.sort-container {
+/* ==================== 文件类型过滤样式 ==================== */
+.filter-container {
   display: flex;
   align-items: center;
   justify-content: flex-start;
   gap: var(--spacing-sm);
-  margin-bottom: var(--spacing-lg);
+  margin-bottom: var(--spacing-md);
   padding: var(--spacing-sm);
   background: var(--bg-secondary);
   border-radius: var(--border-radius-md);
-  border: 1px solid var(--border-color-light);
   flex-wrap: wrap;
 }
 
-.sort-label {
+.filter-label {
   color: var(--text-secondary);
   font-size: var(--font-size-small);
   font-weight: 500;
@@ -554,119 +554,82 @@ body {
   margin-right: var(--spacing-xs);
 }
 
-.sort-status {
+.filter-options {
   display: flex;
-  align-items: center;
   gap: var(--spacing-xs);
-  color: var(--primary-color);
-  font-size: var(--font-size-small);
-  font-weight: 600;
-  background: var(--bg-primary);
-  padding: var(--spacing-xs) var(--spacing-sm);
-  border-radius: var(--border-radius-sm);
-  border: 1px solid var(--primary-color);
-  animation: fadeIn 0.3s ease-out;
-}
-
-.sort-field {
-  white-space: nowrap;
-}
-
-.sort-order {
-  font-weight: bold;
-  transition: transform 0.2s ease;
-}
-
-.sort-container:hover .sort-order {
-  transform: scale(1.2);
-}
-
-.sort-options {
-  display: flex;
-  gap: var(--spacing-sm);
   flex-wrap: wrap;
 }
 
-.sort-options select {
+.filter-button {
   padding: var(--spacing-xs) var(--spacing-sm);
-  border: 1px solid var(--border-color);
-  border-radius: var(--border-radius-sm);
-  background: var(--input-bg);
+  background: var(--bg-primary);
   color: var(--text-primary);
+  border: 0.5px solid var(--border-color);
+  border-radius: var(--border-radius-sm);
   font-size: var(--font-size-small);
+  cursor: pointer;
   transition: all var(--transition-time) ease;
-  min-width: 100px;
-  -webkit-appearance: none;
-  appearance: none;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%236c757d' d='M6 9l-4-4h8z'/%3E%3C/svg%3E");
-  background-repeat: no-repeat;
-  background-position: right 8px center;
-  padding-right: 24px;
+  white-space: nowrap;
 }
 
-.sort-options select:focus {
-  outline: none;
+.filter-button:hover {
+  background: var(--bg-hover);
   border-color: var(--primary-color);
-  box-shadow: 0 0 0 3px rgba(0, 123, 255, 0.1);
 }
 
-.sort-options select:hover {
+.filter-button.active {
+  background: var(--primary-color);
+  color: var(--button-text);
   border-color: var(--primary-color);
-  background-color: var(--bg-hover);
 }
 
 /* 响应式设计 */
 @media (max-width: 767px) {
-  .sort-container {
+  .filter-container {
     justify-content: center;
   }
   
-  .sort-label {
+  .filter-label {
     margin-right: 0;
   }
   
-  .sort-options {
+  .filter-options {
     width: 100%;
     justify-content: center;
-  }
-  
-  .sort-options select {
-    flex: 1;
-    min-width: 120px;
   }
 }
 
 @media (max-width: 480px) {
-  .sort-container {
+  .filter-container {
     flex-direction: column;
     align-items: stretch;
     text-align: center;
   }
   
-  .sort-options {
+  .filter-options {
     flex-direction: column;
   }
   
-  .sort-options select {
+  .filter-button {
     width: 100%;
   }
 }
 
 /* ==================== 文件列表样式 ==================== */
 .section {
-  margin-bottom: var(--spacing-xl);
+  margin-bottom: var(--spacing-lg);
   width: 100%;
   max-width: 100%;
 }
 
 .section h3 {
   color: var(--text-primary);
-  margin-bottom: var(--spacing-md);
+  margin-bottom: var(--spacing-sm);
   font-size: 1.2rem;
   font-weight: 600;
   display: flex;
   align-items: center;
-  gap: var(--spacing-sm);
+  gap: var(--spacing-xs);
 }
 
 .file-list {
@@ -818,23 +781,7 @@ body {
   text-decoration: underline;
 }
 
-.back-button {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--spacing-xs);
-  padding: var(--spacing-sm) var(--spacing-md);
-  background: var(--bg-secondary);
-  color: var(--text-primary);
-  text-decoration: none;
-  border-radius: var(--border-radius-sm);
-  transition: all var(--transition-time) ease;
-  margin-bottom: var(--spacing-lg);
-}
-
-.back-button:hover {
-  background: var(--bg-hover);
-  color: var(--text-primary);
-}
+/* 移除返回按钮样式 */
 
 /* ==================== 错误页面样式 ==================== */
 .error-card {
