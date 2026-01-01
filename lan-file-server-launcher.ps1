@@ -122,31 +122,30 @@ failed_auth_block_time = 300
     
     Write-Host ""
     Write-ColorOutput "=== Step 3: Authentication Information ===" "Yellow"
-    Write-ColorOutput "NOTE: Password authentication has been simplified!" "Cyan"
+    Write-ColorOutput "NOTE: Password authentication is time-based!" "Cyan"
     Write-ColorOutput "- Username: $username (can be modified above)" "White"
-    Write-ColorOutput "- Password: Time-based password (current time in yyyymmddHHMM format)" "White"
+    Write-ColorOutput "- Password: Current time in yyyymmddHHMM format (valid for 5 minutes)" "White"
     Write-ColorOutput "- Example: If current time is 2025-12-30 13:10, password is: 202512301310" "Gray"
     Write-Host ""
     
     # Update configuration files
     Write-ColorOutput "=== Step 4: Updating Configuration Files ===" "Yellow"
     
-    # Update server_config.ini
-    if (Test-Path "server_config.ini") {
-        if (Update-IniFile "server_config.ini" "SERVER" "share_dir" $validatedPath) {
-            Write-ColorOutput "[Success] Updated share_dir in server_config.ini" "Green"
-        } else {
-            Write-ColorOutput "[Error] Failed to update server_config.ini" "Red"
-        }
+    # Update config.json
+    $configPath = "config.json"
+    
+    # Update shared directory in config.json
+    if (Update-JsonConfig $configPath "server" "share_dir" $validatedPath) {
+        Write-ColorOutput "[Success] Updated share_dir in config.json" "Green"
     } else {
-        Write-ColorOutput "[Warning] server_config.ini not found, skipping share_dir update" "Yellow"
+        Write-ColorOutput "[Error] Failed to update config.json (share_dir)" "Red"
     }
     
-    # Update auth_config.ini (username only)
-    if (Update-IniFile "auth_config.ini" "AUTH" "username" $username) {
-        Write-ColorOutput "[Success] Updated username in auth_config.ini" "Green"
+    # Update username in config.json
+    if (Update-JsonConfig $configPath "auth" "username" $username) {
+        Write-ColorOutput "[Success] Updated username in config.json" "Green"
     } else {
-        Write-ColorOutput "[Error] Failed to update username in auth_config.ini" "Red"
+        Write-ColorOutput "[Error] Failed to update config.json (username)" "Red"
     }
     
     # Test server functionality
@@ -164,7 +163,7 @@ failed_auth_block_time = 300
     Write-ColorOutput "=== Initialization Summary ===" "Cyan"
     Write-ColorOutput "Shared Directory: $validatedPath" "White"
     Write-ColorOutput "Username: $username" "White"
-    Write-ColorOutput "Password: Time-based (yyyymmddHHMM format)" "White"
+    Write-ColorOutput "Password: Time-based (yyyymmddHHMM format, valid for 5 minutes)" "White"
     Write-Host ""
     Write-ColorOutput "Configuration files have been updated successfully!" "Green"
     Write-Host ""
@@ -247,8 +246,28 @@ function Generate-Salt {
     }
 }
 
-# Update INI file
-function Update-IniFile {
+# Get JSON configuration
+function Get-JsonConfig {
+    param(
+        [string]$FilePath
+    )
+    
+    try {
+        if (-not (Test-Path $FilePath)) {
+            return $null
+        }
+        
+        $content = Get-Content $FilePath -Encoding UTF8
+        $config = ConvertFrom-Json $content
+        return $config
+    } catch {
+        Write-ColorOutput "[Error] Failed to read JSON config: $($_.Exception.Message)" "Red"
+        return $null
+    }
+}
+
+# Update JSON configuration
+function Update-JsonConfig {
     param(
         [string]$FilePath,
         [string]$Section,
@@ -257,44 +276,35 @@ function Update-IniFile {
     )
     
     try {
-        if (-not (Test-Path $FilePath)) {
-            Write-ColorOutput "[Error] Configuration file not found: $FilePath" "Red"
-            return $false
-        }
+        $config = Get-JsonConfig $FilePath
         
-        $content = Get-Content $FilePath
-        $updated = $false
-        $newContent = @()
-        $sectionFound = $false
-        
-        foreach ($line in $content) {
-            if ($line -match "^\[$Section\]$") {
-                $sectionFound = $true
-                $newContent += $line
-            } elseif ($sectionFound -and $line -match "^$Key\s*=") {
-                $newContent += "$Key = $Value"
-                $updated = $true
-                $sectionFound = $false
-            } else {
-                $newContent += $line
-                if ($line -match "^\[.*\]$") {
-                    $sectionFound = $false
-                }
+        # If config doesn't exist, create default structure
+        if (-not $config) {
+            $config = @{
+                "version" = "1.0.0"
+                "server" = @{}
+                "logging" = @{}
+                "theme" = @{}
+                "caching" = @{}
+                "auth" = @{}
+                "whitelist" = @{}
             }
         }
         
-        # If section doesn't exist, add it
-        if (-not $updated) {
-            $newContent += "[$Section]"
-            $newContent += "$Key = $Value"
-            $updated = $true
+        # Ensure section exists
+        if (-not $config.$Section) {
+            $config.$Section = @{}
         }
         
-        # Write updated content
-        Set-Content -Path $FilePath -Value $newContent -Encoding UTF8
+        # Update the value
+        $config.$Section.$Key = $Value
+        
+        # Convert back to JSON with proper formatting
+        $jsonContent = $config | ConvertTo-Json -Depth 10 -Compress:$false
+        Set-Content -Path $FilePath -Value $jsonContent -Encoding UTF8
         return $true
     } catch {
-        Write-ColorOutput "[Error] Failed to update INI file: $($_.Exception.Message)" "Red"
+        Write-ColorOutput "[Error] Failed to update JSON config: $($_.Exception.Message)" "Red"
         return $false
     }
 }
@@ -357,16 +367,10 @@ function Test-ServerFunctionality {
         Write-ColorOutput "[Info] server.py found" "Green"
         
         # Check configuration files
-        if (-not (Test-Path "server_config.ini")) {
-            Write-ColorOutput "[Warning] server_config.ini not found" "Yellow"
+        if (-not (Test-Path "config.json")) {
+            Write-ColorOutput "[Warning] config.json not found" "Yellow"
         } else {
-            Write-ColorOutput "[Info] server_config.ini found" "Green"
-        }
-        
-        if (-not (Test-Path "auth_config.ini")) {
-            Write-ColorOutput "[Warning] auth_config.ini not found" "Yellow"
-        } else {
-            Write-ColorOutput "[Info] auth_config.ini found" "Green"
+            Write-ColorOutput "[Info] config.json found" "Green"
         }
         
         return $true
@@ -422,7 +426,7 @@ function Show-Help {
     Write-Host ""
     Write-Host "认证信息:" -ForegroundColor White
     Write-Host "  用户名: admin (可配置)" -ForegroundColor Gray
-    Write-Host "  密码: 基于时间 (yyyymmddHHMM 格式)" -ForegroundColor Gray
+    Write-Host "  密码: 基于时间 (yyyymmddHHMM 格式，5分钟内有效)" -ForegroundColor Gray
     Write-Host ""
     Write-Host "系统要求:" -ForegroundColor White
     Write-Host "  - Python 3.x 已安装并添加到 PATH" -ForegroundColor Gray
@@ -576,8 +580,8 @@ function Test-ServerFile {
 function Test-Configuration {
     if (Test-Path "config.py") {
         Write-ColorOutput "[Info] Config file found: config.py" "Green"
-    } elseif (Test-Path "server_config.ini") {
-        Write-ColorOutput "[Info] Config file found: server_config.ini" "Green"
+    } elseif (Test-Path "config.json") {
+        Write-ColorOutput "[Info] Config file found: config.json" "Green"
     } else {
         Write-ColorOutput "[Warning] No config file found, using defaults" "Yellow"
     }
