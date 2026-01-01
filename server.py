@@ -126,14 +126,35 @@ class AuthenticationManager:
     
     def __init__(self, config_manager):
         self.config_manager = config_manager
-        # Session管理现在通过config_manager进行
+        # 存储已使用的密码时间戳，用于防重放攻击
+        self.used_timestamps = set()
+        # 已使用时间戳的清理周期（秒）
+        self.timestamp_cleanup_interval = 3600  # 1小时
+        # 启动清理线程
+        self._start_timestamp_cleanup_thread()
+    
+    def _start_timestamp_cleanup_thread(self):
+        """启动定期清理已使用时间戳的线程"""
+        def cleanup_thread_func():
+            while True:
+                time.sleep(self.timestamp_cleanup_interval)
+                self._cleanup_used_timestamps()
+        
+        thread = threading.Thread(target=cleanup_thread_func, daemon=True, name="TimestampCleanup")
+        thread.start()
+    
+    def _cleanup_used_timestamps(self):
+        """清理已过期的时间戳（超过5分钟）"""
+        current_time = time.time()
+        expired_timestamps = [ts for ts in self.used_timestamps if current_time - ts > 360]  # 6分钟
+        for ts in expired_timestamps:
+            self.used_timestamps.discard(ts)
+        logger.debug(f"清理已过期时间戳，清理了 {len(expired_timestamps)} 个，剩余 {len(self.used_timestamps)} 个")
     
     def verify_credentials(self, username, password):
         """验证用户名和密码
         
-        固定用户名: blycr
-        密码格式: yyyymmddHHMM (基于当前时间)
-        支持当前时间点前后5分钟内的密码
+        基于用户当前登录时间前后5分钟的动态密码验证机制
         
         Args:
             username (str): 用户名
@@ -143,28 +164,46 @@ class AuthenticationManager:
             bool: 认证是否成功
         """
         # 固定用户名验证
-        if username != "blycr":
+        if username != "admin":
+            logger.info(f"用户认证失败 - 用户名不正确: {username}")
             return False
         
-        # 生成基于时间范围的密码列表 (当前时间前后5分钟)
         current_time = datetime.now()
         expected_passwords = []
+        used_timestamps = []
         
-        # 生成前后5分钟内的所有可能密码
+        # 生成前后5分钟内的所有可能密码和对应的时间戳
         for minutes_offset in range(-5, 6):
             # 计算偏移后的时间
             offset_time = current_time + timedelta(minutes=minutes_offset)
             # 生成密码格式 yyyymmddHHMM
             offset_password = offset_time.strftime("%Y%m%d%H%M")
             expected_passwords.append(offset_password)
+            # 生成对应的时间戳（用于防重放攻击）
+            timestamp = offset_time.strftime("%Y%m%d%H%M")
+            used_timestamps.append(timestamp)
         
-        # 信息日志 - 已调整为INFO级别
         logger.info(f"用户认证尝试 - 用户名: {username}")
         logger.debug(f"输入密码: {password}")
         logger.debug(f"预期密码范围: {expected_passwords}")
-        logger.debug(f"密码匹配结果: {password in expected_passwords}")
         
-        return password in expected_passwords
+        # 检查密码是否在预期范围内
+        if password not in expected_passwords:
+            logger.info(f"用户认证失败 - 密码不正确")
+            return False
+        
+        # 防重放攻击检查：验证该时间戳是否已被使用
+        timestamp_index = expected_passwords.index(password)
+        timestamp = used_timestamps[timestamp_index]
+        
+        if timestamp in self.used_timestamps:
+            logger.warning(f"用户认证失败 - 密码已被使用（防重放攻击）")
+            return False
+        
+        # 记录已使用的时间戳
+        self.used_timestamps.add(timestamp)
+        logger.info(f"用户认证成功 - 用户名: {username}")
+        return True
     
     def extract_credentials(self, auth_header):
         """从HTTP Authorization头提取认证信息

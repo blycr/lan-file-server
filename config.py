@@ -1,6 +1,3 @@
-import os
-import sys
-import configparser
 import socket
 import platform
 import uuid
@@ -40,9 +37,7 @@ class ConfigManager:
             config_dir (str): 配置文件所在目录
         """
         self.config_dir = Path(config_dir)
-        self.server_config_file = self.config_dir / "server_config.ini"
-        self.auth_config_file = self.config_dir / "auth_config.ini"
-        self.json_config_file = self.config_dir / "config.json"  # 新增JSON配置文件
+        self.json_config_file = self.config_dir / "config.json"  # JSON配置文件
         
         # 默认服务器配置
         self.server_config = {
@@ -54,7 +49,7 @@ class ConfigManager:
             'SSL_KEY_FILE': '',
             'FAILED_AUTH_LIMIT': 5,
             'FAILED_AUTH_BLOCK_TIME': 300,
-            'SESSION_TIMEOUT': 24 * 3600  # 新增会话超时配置
+            'SESSION_TIMEOUT': 24 * 3600  # 会话超时配置
         }
         
         # 默认日志配置
@@ -153,26 +148,13 @@ class ConfigManager:
     
     def _load_or_create_config(self):
         """加载或创建配置文件"""
-        # 优先从JSON配置加载
+        # 只从JSON配置加载
         if self.json_config_file.exists():
             self._load_json_config()
         else:
-            # 检查并创建服务器配置
-            if not self.server_config_file.exists():
-                self._create_default_server_config()
-                print(f"已创建默认服务器配置文件: {self.server_config_file}")
-            
-            # 检查并创建认证配置
-            if not self.auth_config_file.exists():
-                self._create_default_auth_config()
-                print(f"已创建默认认证配置文件: {self.auth_config_file}")
-            
-            # 加载现有配置
-            self._load_server_config()
-            self._load_auth_config()
-            
-            # 迁移到JSON配置
+            # 创建默认JSON配置
             self._migrate_to_json_config()
+            print(f"已创建默认JSON配置文件: {self.json_config_file}")
     
     def _validate_config(self, config_data):
         """验证配置数据的有效性
@@ -344,7 +326,9 @@ class ConfigManager:
             "auth": {
                 "username": self.auth_config['username'],
                 "password_hash": self.auth_config['password_hash'],
-                "salt": self.auth_config['salt']
+                "salt": self.auth_config['salt'],
+                "failed_auth_limit": self.auth_config['failed_auth_limit'],
+                "failed_auth_block_time": self.auth_config['failed_auth_block_time']
             },
             "whitelist": {
                 "image": self.whitelist_config['image'],
@@ -463,7 +447,9 @@ class ConfigManager:
                 "auth": {
                     "username": self.auth_config['username'],
                     "password_hash": self.auth_config['password_hash'],
-                    "salt": self.auth_config['salt']
+                    "salt": self.auth_config['salt'],
+                    "failed_auth_limit": self.auth_config['failed_auth_limit'],
+                    "failed_auth_block_time": self.auth_config['failed_auth_block_time']
                 },
                 "whitelist": {
                     "image": self.whitelist_config['image'],
@@ -480,104 +466,6 @@ class ConfigManager:
         except Exception as e:
             print(f"警告：迁移配置到JSON格式失败: {e}")
     
-    def _create_default_server_config(self):
-        """创建默认服务器配置文件"""
-        config = configparser.ConfigParser()
-        config['SERVER'] = {
-            'PORT': str(self.server_config['PORT']),
-            'MAX_CONCURRENT_THREADS': str(self.server_config['MAX_CONCURRENT_THREADS']),
-            'SHARE_DIR': self.server_config['SHARE_DIR'],
-            'SSL_CERT_FILE': self.server_config['SSL_CERT_FILE'],
-            'SSL_KEY_FILE': self.server_config['SSL_KEY_FILE'],
-            'FAILED_AUTH_LIMIT': str(self.server_config['FAILED_AUTH_LIMIT']),
-            'FAILED_AUTH_BLOCK_TIME': str(self.server_config['FAILED_AUTH_BLOCK_TIME'])
-        }
-        
-        config['LOGGING'] = {
-            'LOG_LEVEL': self.logging_config['LOG_LEVEL'],
-            'LOG_FILE': self.logging_config['LOG_FILE']
-        }
-        
-        config['THEME'] = {
-            'DEFAULT_THEME': self.theme_config['DEFAULT_THEME']
-        }
-        
-        config['CACHING'] = {
-            'INDEX_CACHE_SIZE': str(self.caching_config['INDEX_CACHE_SIZE']),
-            'SEARCH_CACHE_SIZE': str(self.caching_config['SEARCH_CACHE_SIZE']),
-            'UPDATE_INTERVAL': str(self.caching_config['UPDATE_INTERVAL'])
-        }
-        
-        with open(self.server_config_file, 'w', encoding='utf-8') as f:
-            config.write(f)
-    
-    def _create_default_auth_config(self):
-        """创建默认认证配置文件"""
-        config = configparser.ConfigParser()
-        config['AUTH'] = {
-            'username': self.auth_config['username'],
-            'password_hash': self.auth_config['password_hash'],
-            'salt': self.auth_config['salt'],
-            'failed_auth_limit': str(self.auth_config['failed_auth_limit']),
-            'failed_auth_block_time': str(self.auth_config['failed_auth_block_time'])
-        }
-        
-        with open(self.auth_config_file, 'w', encoding='utf-8') as f:
-            config.write(f)
-    
-    def _load_server_config(self):
-        """加载服务器配置"""
-        try:
-            config = configparser.ConfigParser()
-            config.read(self.server_config_file, encoding='utf-8')
-            
-            if 'SERVER' in config:
-                server_section = config['SERVER']
-                self.server_config['PORT'] = server_section.getint('PORT', self.server_config['PORT'])
-                self.server_config['MAX_CONCURRENT_THREADS'] = server_section.getint('MAX_CONCURRENT_THREADS', self.server_config['MAX_CONCURRENT_THREADS'])
-                self.server_config['SHARE_DIR'] = server_section.get('SHARE_DIR', self.server_config['SHARE_DIR'])
-                self.server_config['SSL_CERT_FILE'] = server_section.get('SSL_CERT_FILE', self.server_config['SSL_CERT_FILE'])
-                self.server_config['SSL_KEY_FILE'] = server_section.get('SSL_KEY_FILE', self.server_config['SSL_KEY_FILE'])
-                self.server_config['FAILED_AUTH_LIMIT'] = server_section.getint('FAILED_AUTH_LIMIT', self.server_config['FAILED_AUTH_LIMIT'])
-                self.server_config['FAILED_AUTH_BLOCK_TIME'] = server_section.getint('FAILED_AUTH_BLOCK_TIME', self.server_config['FAILED_AUTH_BLOCK_TIME'])
-            
-            # 加载日志配置
-            if 'LOGGING' in config:
-                logging_section = config['LOGGING']
-                self.logging_config['LOG_LEVEL'] = logging_section.get('LOG_LEVEL', self.logging_config['LOG_LEVEL'])
-                self.logging_config['LOG_FILE'] = logging_section.get('LOG_FILE', self.logging_config['LOG_FILE'])
-            
-            # 加载主题配置
-            if 'THEME' in config:
-                theme_section = config['THEME']
-                self.theme_config['DEFAULT_THEME'] = theme_section.get('DEFAULT_THEME', self.theme_config['DEFAULT_THEME'])
-            
-            # 加载缓存配置
-            if 'CACHING' in config:
-                caching_section = config['CACHING']
-                self.caching_config['INDEX_CACHE_SIZE'] = caching_section.getint('INDEX_CACHE_SIZE', self.caching_config['INDEX_CACHE_SIZE'])
-                self.caching_config['SEARCH_CACHE_SIZE'] = caching_section.getint('SEARCH_CACHE_SIZE', self.caching_config['SEARCH_CACHE_SIZE'])
-                self.caching_config['UPDATE_INTERVAL'] = caching_section.getint('UPDATE_INTERVAL', self.caching_config['UPDATE_INTERVAL'])
-                
-        except Exception as e:
-            print(f"警告：加载服务器配置时出错，使用默认值: {e}")
-    
-    def _load_auth_config(self):
-        """加载认证配置"""
-        try:
-            config = configparser.ConfigParser()
-            config.read(self.auth_config_file, encoding='utf-8')
-            
-            if 'AUTH' in config:
-                auth_section = config['AUTH']
-                self.auth_config['username'] = auth_section.get('username', self.auth_config['username'])
-                self.auth_config['password_hash'] = auth_section.get('password_hash', self.auth_config['password_hash'])
-                self.auth_config['salt'] = auth_section.get('salt', self.auth_config['salt'])
-                self.auth_config['failed_auth_limit'] = auth_section.getint('failed_auth_limit', self.auth_config['failed_auth_limit'])
-                self.auth_config['failed_auth_block_time'] = auth_section.getint('failed_auth_block_time', self.auth_config['failed_auth_block_time'])
-        except Exception as e:
-            print(f"警告：加载认证配置时出错，使用默认值: {e}")
-    
     def save_auth_config(self, username=None, password_hash=None, salt=None):
         """保存认证配置"""
         try:
@@ -588,19 +476,6 @@ class ConfigManager:
                 self.auth_config['password_hash'] = password_hash
             if salt is not None:
                 self.auth_config['salt'] = salt
-            
-            # 保存到旧的INI文件（向后兼容）
-            config = configparser.ConfigParser()
-            config['AUTH'] = {
-                'username': self.auth_config['username'],
-                'password_hash': self.auth_config['password_hash'],
-                'salt': self.auth_config['salt'],
-                'failed_auth_limit': str(self.auth_config['failed_auth_limit']),
-                'failed_auth_block_time': str(self.auth_config['failed_auth_block_time'])
-            }
-            
-            with open(self.auth_config_file, 'w', encoding='utf-8') as f:
-                config.write(f)
             
             # 保存到JSON配置文件
             if self.json_config_file.exists():
@@ -614,6 +489,8 @@ class ConfigManager:
                 config_data['auth']['username'] = self.auth_config['username']
                 config_data['auth']['password_hash'] = self.auth_config['password_hash']
                 config_data['auth']['salt'] = self.auth_config['salt']
+                config_data['auth']['failed_auth_limit'] = self.auth_config['failed_auth_limit']
+                config_data['auth']['failed_auth_block_time'] = self.auth_config['failed_auth_block_time']
                 
                 # 写回JSON配置文件
                 with open(self.json_config_file, 'w', encoding='utf-8') as f:
@@ -642,6 +519,7 @@ class ConfigManager:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                 s.bind(('', port))
                 return True
+
         except OSError:
             return False
     
@@ -746,7 +624,7 @@ class ConfigManager:
             return normalized_path.is_relative_to(normalized_base)
         except Exception as e:
             # 在内网环境下，出错时也返回True，避免误判
-            logger.debug(f"路径安全检查出错，放宽限制: {path} - {e}")
+            print(f"路径安全检查出错，放宽限制: {path} - {e}")
             return True
     
     def record_failed_attempt(self, ip_address):
@@ -819,53 +697,6 @@ class ConfigManager:
         """
         if ip_address in self.failed_attempts:
             del self.failed_attempts[ip_address]
-    
-    def create_session(self, username, device_info=""):
-        """创建新会话
-        
-        Args:
-            username (str): 用户名
-            device_info (str): 设备标识信息
-            
-        Returns:
-            str: 会话ID
-        """
-        session_id = str(uuid.uuid4())
-        current_time = time.time()
-        
-        self.sessions[session_id] = {
-            'username': username,
-            'created_at': current_time,
-            'last_access': current_time,
-            'device_info': device_info
-        }
-        
-        return session_id
-    
-    def validate_session(self, session_id):
-        """验证会话有效性
-        
-        Args:
-            session_id (str): 会话ID
-            
-        Returns:
-            bool: 会话是否有效
-        """
-        if not session_id or session_id not in self.sessions:
-            return False
-        
-        session = self.sessions[session_id]
-        current_time = time.time()
-        
-        # 检查会话是否过期
-        expire_time = self.server_config['SESSION_TIMEOUT']
-        if current_time - session['created_at'] > expire_time:
-            del self.sessions[session_id]
-            return False
-        
-        # 更新最后访问时间
-        session['last_access'] = current_time
-        return True
     
     def get_session_username(self, session_id):
         """获取会话对应的用户名

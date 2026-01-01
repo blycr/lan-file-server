@@ -104,7 +104,7 @@ function Initialize-Server {
         Write-ColorOutput "[Info] Creating auth_config.ini..." "Cyan"
         $defaultAuthContent = @"
 [AUTH]
-username = blycr
+username = admin
 password_hash = 
 salt = 
 failed_auth_limit = 5
@@ -114,10 +114,10 @@ failed_auth_block_time = 300
     }
     
     # Get username
-    Write-ColorOutput "Enter username (default: blycr):" "White"
+    Write-ColorOutput "Enter username (default: admin):" "White"
     $username = Read-Host "Username"
     if ([string]::IsNullOrWhiteSpace($username)) {
-        $username = "blycr"
+        $username = "admin"
     }
     
     Write-Host ""
@@ -421,7 +421,7 @@ function Show-Help {
     Write-Host "  6. 退出" -ForegroundColor Gray
     Write-Host ""
     Write-Host "认证信息:" -ForegroundColor White
-    Write-Host "  用户名: blycr (可配置)" -ForegroundColor Gray
+    Write-Host "  用户名: admin (可配置)" -ForegroundColor Gray
     Write-Host "  密码: 基于时间 (yyyymmddHHMM 格式)" -ForegroundColor Gray
     Write-Host ""
     Write-Host "系统要求:" -ForegroundColor White

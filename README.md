@@ -29,7 +29,7 @@ python server.py
 
 ## 详细文档
 
-请查看项目的[Wiki文档](https://github.com/blycr/lan-file-server.wiki.git)获取完整的：
+请查看项目的[Wiki文档](https://github.com/user/repo.wiki.git)获取完整的：
 - 快速开始指南
 - 配置说明
 - 使用指南
@@ -45,7 +45,7 @@ python server.py
 
 ## 作者与许可证
 
-- **开发者**: blycr
+- **开发者**: LAN File Server Project
 - **项目类型**: 个人文件共享工具
 - **许可证**: MIT
 
