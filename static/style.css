@@ -1163,6 +1163,90 @@ body {
   }
 }
 
+/* ==================== 下拉菜单样式 ==================== */
+/* 排序选项容器 */
+.sort-options {
+  display: flex;
+  gap: var(--spacing-sm);
+  align-items: center;
+  flex-wrap: nowrap;
+}
+
+/* 下拉菜单基础样式 */
+select {
+  background: var(--input-bg);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--border-radius-md);
+  padding: var(--spacing-sm) var(--spacing-md);
+  font-size: var(--font-size-base);
+  font-family: var(--font-family);
+  cursor: pointer;
+  transition: all var(--transition-time) ease;
+  min-height: 44px;
+  box-shadow: var(--shadow-sm);
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%236c757d' d='M6 9L1 4h10z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right var(--spacing-sm) center;
+  padding-right: var(--spacing-xl);
+  flex: 1;
+  min-width: 120px;
+}
+
+/* 下拉菜单悬停效果 */
+select:hover {
+  border-color: var(--primary-color);
+  box-shadow: var(--shadow-md);
+  transform: translateY(-1px);
+}
+
+/* 下拉菜单焦点状态 */
+select:focus {
+  outline: none;
+  border-color: var(--primary-color);
+  box-shadow: 0 0 0 3px rgba(0, 123, 255, 0.1);
+}
+
+/* 下拉选项样式 */
+select option {
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  padding: var(--spacing-sm) var(--spacing-md);
+  border-radius: var(--border-radius-sm);
+}
+
+/* 选中选项样式 */
+select option:checked {
+  background: var(--primary-color);
+  color: var(--button-text);
+}
+
+/* 响应式设计 */
+@media (max-width: 720px) {
+  .sort-options {
+    flex-direction: column;
+    align-items: stretch;
+    flex-wrap: wrap;
+  }
+  
+  select {
+    width: 100%;
+    min-width: auto;
+    margin-bottom: var(--spacing-sm);
+  }
+  
+  select:last-child {
+    margin-bottom: 0;
+  }
+}
+
+@media (min-width: 721px) {
+  .sort-options {
+    justify-content: flex-start;
+  }
+}
+
 /* ==================== 打印样式 ==================== */
 @media print {
   .header,

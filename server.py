@@ -5,7 +5,7 @@ import json
 import mimetypes
 import signal
 import logging
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import HTTPServer, BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs, unquote
 from urllib.parse import quote as urlquote
 from pathlib import Path
@@ -176,8 +176,9 @@ class AuthenticationManager:
         Returns:
             bool: 认证是否成功
         """
-        # 固定用户名验证
-        if username != "admin":
+        # 从配置文件获取用户名
+        config_username = self.config_manager.auth_config.get("username", "admin")
+        if username != config_username:
             logger.info(f"用户认证失败 - 用户名不正确: {username}")
             return False
 
@@ -341,6 +342,7 @@ class FileIndexer:
         self.sqlite_db_path = Path(".cache/index.db")
         self.sqlite_conn = None
         self.sqlite_cursor = None
+        self.fts5_supported = False  # 标记FTS5是否支持
 
         # 初始化SQLite数据库
         if self.sqlite_enabled:
@@ -414,9 +416,11 @@ class FileIndexer:
                     )
                 """
                 )
+                self.fts5_supported = True  # FTS5创建成功，标记为支持
             except sqlite3.OperationalError:
                 # 不支持FTS5，跳过
                 logger.warning("SQLite FTS5不支持，全文搜索功能将受限")
+                self.fts5_supported = False  # 明确标记为不支持
 
             self.sqlite_conn.commit()
             logger.info("SQLite索引数据库初始化成功")
@@ -465,11 +469,31 @@ class FileIndexer:
             logger.error(f"启动SQLite更新线程失败: {e}")
 
     def _cleanup(self):
-        """清理资源，关闭线程池和SQLite连接"""
+        """清理资源，关闭线程池和SQLite连接，确保数据完整性"""
         logger.info("开始清理FileIndexer资源...")
 
         # 停止SQLite定期更新线程
-        self._stop_update_thread = True
+        if hasattr(self, "_stop_update_thread"):
+            self._stop_update_thread = True
+            logger.info("SQLite定期更新线程已停止")
+            # 等待更新线程退出
+            if (
+                hasattr(self, "sqlite_update_thread")
+                and self.sqlite_update_thread.is_alive()
+            ):
+                logger.info("等待SQLite更新线程退出...")
+                self.sqlite_update_thread.join(timeout=10)  # 最多等待10秒
+                if self.sqlite_update_thread.is_alive():
+                    logger.warning("SQLite更新线程未能及时退出")
+
+        # 等待当前索引任务完成
+        if hasattr(self, "current_index_task") and self.current_index_task:
+            try:
+                # 等待当前索引任务完成，最多等待5秒
+                self.current_index_task.result(timeout=5)
+                logger.info("当前索引任务已完成")
+            except Exception as e:
+                logger.warning(f"等待索引任务完成超时: {e}")
 
         # 关闭线程池
         if self.thread_pool:
@@ -479,7 +503,26 @@ class FileIndexer:
             except Exception as e:
                 logger.error(f"关闭线程池失败: {e}")
 
-        # 关闭SQLite连接和游标
+        # 在关闭前执行最后一次SQLite数据库更新，确保所有更改都被保存
+        if self.sqlite_enabled:
+            logger.info("执行最后一次SQLite数据库更新，确保数据完整性...")
+            self._populate_sqlite_db()
+
+        # 确保所有未提交的SQLite事务都被提交
+        if self.sqlite_conn:
+            try:
+                self.sqlite_conn.commit()
+                logger.info("所有未提交的SQLite事务已提交")
+            except Exception as e:
+                logger.error(f"提交SQLite事务失败: {e}")
+                # 发生错误时回滚
+                try:
+                    self.sqlite_conn.rollback()
+                    logger.info("SQLite事务已回滚")
+                except Exception as e2:
+                    logger.error(f"回滚SQLite事务失败: {e2}")
+
+        # 关闭SQLite游标
         if self.sqlite_cursor:
             try:
                 self.sqlite_cursor.close()
@@ -487,6 +530,7 @@ class FileIndexer:
             except Exception as e:
                 logger.error(f"关闭SQLite游标失败: {e}")
 
+        # 关闭SQLite连接
         if self.sqlite_conn:
             try:
                 self.sqlite_conn.close()
@@ -497,19 +541,26 @@ class FileIndexer:
         logger.info("FileIndexer资源清理完成")
 
     def _populate_sqlite_db(self):
-        """初始填充SQLite数据库 - 递归扫描所有目录和文件"""
+        """增量更新SQLite数据库 - 只更新变化的文件和目录"""
         if not self.sqlite_enabled or not self.share_dir.exists():
             return
 
-        logger.info("开始填充SQLite数据库...")
+        logger.info("开始增量更新SQLite数据库...")
         start_time = time.time()
 
         try:
-            # 清空现有数据，避免重复
-            self.sqlite_cursor.execute("DELETE FROM file_index")
-            self.sqlite_conn.commit()
+            # 获取数据库中当前的文件和目录信息，包含size字段
+            self.sqlite_cursor.execute(
+                "SELECT full_path, modified_time, is_directory, size FROM file_index"
+            )
+            db_files = {
+                row[0]: (row[1], row[2], row[3])
+                for row in self.sqlite_cursor.fetchall()
+            }
 
-            # 递归扫描所有目录和文件
+            # 存储当前扫描到的所有文件和目录路径
+            current_files = set()
+
             def scan_directory_recursive(dir_path, relative_path=""):
                 """递归扫描目录"""
                 try:
@@ -541,59 +592,89 @@ class FileIndexer:
                                 logger.warning(f"跳过不安全的路径: {item}")
                                 continue
 
+                            # 添加到当前扫描的文件集合
+                            current_files.add(item.path)
+
+                            # 获取文件/目录的修改时间
+                            try:
+                                stat_info = item.stat()
+                                modified_time = int(stat_info.st_mtime)
+                            except Exception as e:
+                                logger.warning(f"获取文件信息失败: {item} - {e}")
+                                continue
+
                             if item.is_dir():
-                                # 插入目录
-                                try:
-                                    self.sqlite_cursor.execute(
-                                        """
-                                        INSERT INTO file_index
-                                        (name, path, full_path, type, size, extension, modified_time, is_directory)
-                                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                                    """,
-                                        (
-                                            item_name,
-                                            item_relative_path,
-                                            item.path,
-                                            "directory",
-                                            0,
-                                            "",
-                                            int(item.stat().st_mtime),
-                                            1,
-                                        ),
-                                    )
-                                except Exception as e:
-                                    logger.error(f"插入目录失败: {item} - {e}")
+                                # 目录处理
+                                is_dir = 1
+
+                                # 检查是否需要更新
+                                if (
+                                    item.path not in db_files
+                                    or db_files[item.path][0] != modified_time
+                                    or db_files[item.path][1] != is_dir
+                                ):
+                                    # 插入或更新目录
+                                    try:
+                                        self.sqlite_cursor.execute(
+                                            """
+                                            INSERT OR REPLACE INTO file_index
+                                            (name, path, full_path, type, size, extension, modified_time, is_directory, updated_at)
+                                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, strftime('%s', 'now'))
+                                        """,
+                                            (
+                                                item_name,
+                                                item_relative_path,
+                                                item.path,
+                                                "directory",
+                                                0,
+                                                "",
+                                                modified_time,
+                                                is_dir,
+                                            ),
+                                        )
+                                    except Exception as e:
+                                        logger.error(f"更新目录失败: {item} - {e}")
 
                                 # 递归扫描子目录 - 传递实际路径而不是DirEntry对象
                                 scan_directory_recursive(item.path, item_relative_path)
 
                             elif item.is_file():
-                                # 插入文件
-                                try:
-                                    stat_info = item.stat()
-                                    # 正确获取文件扩展名
-                                    file_ext = Path(item.name).suffix.lower()
-                                    self.sqlite_cursor.execute(
-                                        """
-                                        INSERT INTO file_index
-                                        (name, path, full_path, type, size, extension, modified_time, is_directory)
-                                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                                    """,
-                                        (
-                                            item_name,
-                                            item_relative_path,
-                                            item.path,
-                                            self.config_manager.get_file_type(
-                                                item.path
+                                # 文件处理
+                                is_dir = 0
+                                file_size = stat_info.st_size
+
+                                # 检查是否需要更新
+                                if (
+                                    item.path not in db_files
+                                    or db_files[item.path][0] != modified_time
+                                    or db_files[item.path][1] != is_dir
+                                    or db_files[item.path][2] != file_size
+                                ):
+                                    # 插入或更新文件
+                                    try:
+                                        # 正确获取文件扩展名
+                                        file_ext = Path(item.name).suffix.lower()
+                                        self.sqlite_cursor.execute(
+                                            """
+                                            INSERT OR REPLACE INTO file_index
+                                            (name, path, full_path, type, size, extension, modified_time, is_directory, updated_at)
+                                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, strftime('%s', 'now'))
+                                        """,
+                                            (
+                                                item_name,
+                                                item_relative_path,
+                                                item.path,
+                                                self.config_manager.get_file_type(
+                                                    item.path
+                                                ),
+                                                file_size,
+                                                file_ext,
+                                                modified_time,
+                                                is_dir,
                                             ),
-                                            stat_info.st_size,
-                                            file_ext,
-                                            int(stat_info.st_mtime),
-                                            0,
-                                        ),
-                                    )
-                                except Exception as e:
-                                    logger.error(f"插入文件失败: {item} - {e}")
+                                        )
+                                    except Exception as e:
+                                        logger.error(f"更新文件失败: {item} - {e}")
 
                 except PermissionError:
                     logger.warning(f"权限不足，跳过目录: {dir_path}")
@@ -603,14 +684,30 @@ class FileIndexer:
             # 开始扫描根目录
             scan_directory_recursive(self.share_dir)
 
+            # 删除数据库中存在但当前文件系统中不存在的文件和目录
+            files_to_delete = db_files.keys() - current_files
+            if files_to_delete:
+                for file_path in files_to_delete:
+                    try:
+                        self.sqlite_cursor.execute(
+                            "DELETE FROM file_index WHERE full_path = ?", (file_path,)
+                        )
+                    except Exception as e:
+                        logger.error(f"删除文件记录失败: {file_path} - {e}")
+
             # 提交所有更改
             self.sqlite_conn.commit()
 
             end_time = time.time()
-            logger.info(f"SQLite数据库填充完成，耗时: {end_time - start_time:.2f}秒")
+            logger.info(
+                f"SQLite数据库增量更新完成，耗时: {end_time - start_time:.2f}秒"
+            )
+            logger.info(
+                f"新增/更新文件数: {len(current_files) - len(db_files) + len(files_to_delete)}, 删除文件数: {len(files_to_delete)}"
+            )
 
         except Exception as e:
-            logger.error(f"填充SQLite数据库失败: {e}", exc_info=True)
+            logger.error(f"更新SQLite数据库失败: {e}", exc_info=True)
             # 发生错误时回滚
             self.sqlite_conn.rollback()
 
@@ -618,13 +715,44 @@ class FileIndexer:
         """初始化线程池"""
         try:
             from concurrent.futures import ThreadPoolExecutor
-
-            # 根据CPU核心数动态调整线程池大小
             import multiprocessing
+            import psutil
 
+            # 获取CPU核心数
             cpu_count = multiprocessing.cpu_count()
-            # 索引和搜索任务通常是IO密集型，线程数可以设置为CPU核心数的1-2倍
-            max_workers = min(4, cpu_count * 2)
+
+            # 获取系统内存大小（GB）
+            total_memory = psutil.virtual_memory().total / (1024**3)
+
+            # 索引和搜索任务是IO密集型的，线程数可以设置为CPU核心数的2-4倍
+            # 根据内存大小调整上限：内存越大，允许的线程数越多
+            if total_memory < 4:
+                # 小于4GB内存，限制线程数
+                max_workers = min(4, cpu_count * 2)
+            elif total_memory < 8:
+                # 4-8GB内存，中等线程数
+                max_workers = min(8, cpu_count * 3)
+            else:
+                # 大于8GB内存，更多线程数
+                max_workers = min(12, cpu_count * 4)
+
+            logger.info(
+                f"初始化线程池，CPU核心数: {cpu_count}, 内存: {total_memory:.2f}GB, 线程数: {max_workers}"
+            )
+
+            self.thread_pool = ThreadPoolExecutor(
+                max_workers=max_workers,
+                thread_name_prefix="IndexWorker",
+                # 设置线程池线程的最大空闲时间，避免资源浪费
+                # Python 3.8+支持timeout参数，这里暂时不使用
+            )
+        except ImportError:
+            # psutil模块未安装，使用默认值
+            cpu_count = multiprocessing.cpu_count()
+            max_workers = min(6, cpu_count * 2)
+            logger.info(
+                f"psutil模块未安装，使用默认线程池设置，CPU核心数: {cpu_count}, 线程数: {max_workers}"
+            )
             self.thread_pool = ThreadPoolExecutor(
                 max_workers=max_workers, thread_name_prefix="IndexWorker"
             )
@@ -649,12 +777,12 @@ class FileIndexer:
         # 优化：先检查是否为简单情况（空搜索），快速返回缓存
         if not search_term:
             # 对于空搜索，直接返回根目录内容，不进行递归
-            cached_data = self._get_cache(f"_{sort_by}_{sort_order}")  # 使用特殊缓存键
+            cached_data = self._get_cache("", sort_by, sort_order)  # 使用特殊缓存键
             if cached_data:
                 return cached_data
 
         # 检查多级缓存，加入排序参数
-        cached_data = self._get_cache(f"{search_term}_{sort_by}_{sort_order}")
+        cached_data = self._get_cache(search_term, sort_by, sort_order)
         if cached_data:
             return cached_data
 
@@ -712,6 +840,11 @@ class FileIndexer:
         try:
             # 首先尝试使用SQLite进行索引和搜索
             if self.sqlite_enabled:
+                # 优化：如果排序字段是size，确保SQLite数据库中的size字段是最新的
+                if sort_by == "size":
+                    logger.debug("排序字段为size，更新SQLite数据库中的文件大小信息...")
+                    self._populate_sqlite_db()
+
                 # 使用SQLite索引加速搜索
                 sqlite_index_data = self._generate_index_from_sqlite(
                     search_term, sort_by, sort_order
@@ -723,8 +856,7 @@ class FileIndexer:
                     self.last_index_time = current_time
 
                     # 使用多级缓存，缓存键包含排序参数
-                    cache_key = f"{search_term}_{sort_by}_{sort_order}"
-                    self._set_cache(cache_key, sqlite_index_data)
+                    self._set_cache(search_term, sqlite_index_data, sort_by, sort_order)
 
                     return sqlite_index_data
 
@@ -764,7 +896,8 @@ class FileIndexer:
                     if sort_by == "name":
                         return item["name"].lower()
                     elif sort_by == "size":
-                        return item["size"]
+                        # 确保size字段的值是数字类型
+                        return int(item.get("size", 0))
                     elif sort_by == "modified":
                         return item["modified_time"]
                     elif sort_by == "type":
@@ -795,8 +928,7 @@ class FileIndexer:
             self.last_index_time = current_time
 
             # 使用多级缓存，缓存键包含排序参数
-            cache_key = f"{search_term}_{sort_by}_{sort_order}"
-            self._set_cache(cache_key, index_data)
+            self._set_cache(search_term, index_data, sort_by, sort_order)
 
             # 更新文件元数据（用于增量索引）
             self._update_file_metadata(index_data)
@@ -857,6 +989,10 @@ class FileIndexer:
             base_query = "SELECT * FROM file_index WHERE 1=1"
             params = []
 
+            # 添加路径条件：当没有搜索词时，只显示根目录下的一级文件和目录
+            if not search_term:
+                base_query += " AND path = ''"
+
             # 添加搜索条件
             if search_term:
                 base_query += " AND (name LIKE ? OR path LIKE ?)"
@@ -915,16 +1051,16 @@ class FileIndexer:
 
         return index_data
 
-    def _get_cache_key(self, search_term):
+    def _get_cache_key(self, search_term, sort_by="name", sort_order="asc"):
         """生成缓存键"""
-        return f"index_{search_term}"
+        return f"index_{search_term}_{sort_by}_{sort_order}"
 
-    def _get_cache(self, search_term):
+    def _get_cache(self, search_term, sort_by="name", sort_order="asc"):
         """从多级缓存中获取数据"""
         if not self.enable_multi_level_cache:
             return None
 
-        cache_key = self._get_cache_key(search_term)
+        cache_key = self._get_cache_key(search_term, sort_by, sort_order)
 
         # 1. 快速检查内存缓存（热点数据）
         if cache_key in self.memory_cache:
@@ -946,19 +1082,19 @@ class FileIndexer:
                         with open(cache_file, "r", encoding="utf-8") as f:
                             cached_data = json.load(f)
                         # 将磁盘缓存加载到内存缓存
-                        self._set_cache(search_term, cached_data)
+                        self._set_cache(search_term, cached_data, sort_by, sort_order)
                         return cached_data
                 except Exception as e:
                     logger.error(f"读取磁盘缓存失败: {e}")
 
         return None
 
-    def _set_cache(self, search_term, data):
+    def _set_cache(self, search_term, data, sort_by="name", sort_order="asc"):
         """设置多级缓存"""
         if not self.enable_multi_level_cache:
             return
 
-        cache_key = self._get_cache_key(search_term)
+        cache_key = self._get_cache_key(search_term, sort_by, sort_order)
 
         # 1. 设置内存缓存，使用LRU策略
         self.memory_cache[cache_key] = data
@@ -1089,19 +1225,18 @@ class FileIndexer:
                                     1,  # is_directory = 1表示目录
                                 ),
                             )
-                            self.sqlite_conn.commit()
                         except Exception as e:
                             logger.error(f"插入目录到SQLite失败: {item} - {e}")
 
                 elif item.is_file():
-                    # 获取文件基本信息
-                    file_ext = item.suffix.lower()
-
                     # 只调用一次stat()，减少IO操作
                     try:
                         stat_info = item.stat()
                         size = stat_info.st_size
                         modified_time = int(stat_info.st_mtime)
+                        # 获取文件基本信息，将DirEntry转换为Path对象
+                        file_path = Path(item.path)
+                        file_ext = file_path.suffix.lower()
                     except Exception as e:
                         logger.warning(f"获取文件信息失败: {item} - {e}")
                         continue
@@ -1127,7 +1262,6 @@ class FileIndexer:
                                     0,  # is_directory = 0表示文件
                                 ),
                             )
-                            self.sqlite_conn.commit()
                         except Exception as e:
                             logger.error(f"插入文件到SQLite失败: {item} - {e}")
 
@@ -1149,9 +1283,9 @@ class FileIndexer:
                                 file_info = {
                                     "name": item_name,
                                     "path": item_relative_path,
-                                    "full_path": str(item),
+                                    "full_path": item.path,
                                     "type": self.config_manager.get_file_type(
-                                        str(item)
+                                        item.path
                                     ),
                                     "size": size,
                                     "size_formatted": self.config_manager.format_file_size(
@@ -1170,6 +1304,17 @@ class FileIndexer:
             pass
         except Exception as e:
             logger.error(f"索引目录 {dir_path} 时出错: {e}")
+        finally:
+            # 统一提交事务，提高性能
+            if self.sqlite_enabled:
+                try:
+                    self.sqlite_conn.commit()
+                except Exception as e:
+                    logger.error(f"提交SQLite事务失败: {e}")
+                    try:
+                        self.sqlite_conn.rollback()
+                    except Exception as e2:
+                        logger.error(f"回滚SQLite事务失败: {e2}")
 
     def _index_directory(self, dir_path, relative_path, index_data, search_term):
         """递归索引目录
@@ -1351,7 +1496,8 @@ class FileIndexer:
                 if sort_by == "name":
                     return (not item["is_dir"], item["name"].lower())
                 elif sort_by == "size":
-                    return (not item["is_dir"], item["size"])
+                    # 确保size字段的值是数字类型
+                    return (not item["is_dir"], int(item.get("size", 0)))
                 elif sort_by == "modified":
                     return (not item["is_dir"], item["modified_time"])
                 elif sort_by == "type":
@@ -1701,8 +1847,6 @@ class HTMLTemplate:
                         <option value="asc" selected="">升序</option>
                         <option value="desc">降序</option>
                     </select>
-                </div>
-                <div class="file-type-filter">
                     <select id="file_type_filter" onchange="filterByType()" aria-label="文件类型过滤">
                         <option value="all" selected="">全部</option>
                         <option value="image">图片</option>
@@ -1755,7 +1899,7 @@ class HTMLTemplate:
                 )
 
                 files_html += f"""
-                    <li class="file-item file">
+                    <li class="file-item file" data-size="{file_info['size']}">
                         <span class="file-icon">{type_icon}</span>
                         <div class="file-info">
                             <a href="/download/{urlquote(file_info['path'], encoding='utf-8', safe='')}" class="file-link" title="{file_info['name']}">{file_info['name']}</a>
@@ -1829,8 +1973,9 @@ class HTMLTemplate:
                                 bValue = b.querySelector('.file-link').textContent.trim().toLowerCase();
                                 break;
                             case 'size':
-                                aValue = parseInt(a.querySelector('.file-size')?.textContent.replace(/[^0-9]/g, '')) || 0;
-                                bValue = parseInt(b.querySelector('.file-size')?.textContent.replace(/[^0-9]/g, '')) || 0;
+                                // 使用data-size属性进行精确排序
+                                aValue = parseInt(a.dataset.size) || 0;
+                                bValue = parseInt(b.dataset.size) || 0;
                                 break;
                             case 'modified':
                                 // 这里需要根据实际情况获取修改时间，当前示例中没有这个数据
@@ -1960,11 +2105,6 @@ class HTMLTemplate:
 
         sort_html = f"""
         <div class="sort-container">
-            <div class="sort-label">排序方式:</div>
-            <div class="sort-status" title="当前排序">
-                <span class="sort-field">{sort_indicator}</span>
-                <span class="sort-order">{order_indicator}</span>
-            </div>
             <div class="sort-options">
                 <select id="sort_by" onchange="changeSort()" aria-label="排序字段">
                     <option value="name" {'selected' if current_sort_by == 'name' else ''}>名称</option>
@@ -2023,7 +2163,7 @@ class HTMLTemplate:
                 )
 
                 files_html += f"""
-                    <li class="file-item file">
+                    <li class="file-item file" data-size="{file_info['size']}">
                         <span class="file-icon">{type_icon}</span>
                         <div class="file-info">
                             <a href="/download/{urlquote(file_info['path'], encoding='utf-8', safe='')}" class="file-link" title="{file_info['name']}">{file_info['name']}</a>
@@ -2177,10 +2317,20 @@ class FileServerHandler(BaseHTTPRequestHandler):
     @error_handler
     def do_GET(self):
         """处理GET请求"""
+        import time
+
+        # 记录请求开始时间
+        request_start_time = time.time()
+        client_ip = self.client_address[0]
+        method = "GET"
+
         # 解析URL
         parsed_url = urlparse(self.path)
         path = parsed_url.path
         query_params = parse_qs(parsed_url.query)
+
+        # 记录请求信息
+        logger.info(f"收到{method}请求，客户端IP: {client_ip}, 路径: {path}")
 
         # 检查是否需要HTTPS重定向
         # 获取SSL启用状态
@@ -2343,62 +2493,117 @@ class FileServerHandler(BaseHTTPRequestHandler):
                     return
 
         # 路由处理
-        if path == "/" or path == "/index":
-            self._handle_index(query_params)
-        elif path == "/search":
-            self._handle_search(query_params)
-        elif path == "/logout":
-            self._handle_logout()
-        elif path == "/.well-known/appspecific/com.chrome.devtools.json":
-            # 处理Chrome DevTools 404请求，减少日志噪音
-            self.send_response(404)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", "0")
-            self.end_headers()
-            return
-        elif path.startswith("/browse"):
-            self._handle_browse(path)
-        elif path.startswith("/download"):
-            self._handle_download(path)
-        elif path.startswith("/static/"):
-            self._handle_static(path)
-        elif path == "/favicon.ico":
-            self._handle_favicon()
-        # API路由
-        elif path.startswith("/api/files"):
-            self._handle_api_files(path, query_params)
-        elif path.startswith("/api/directories"):
-            self._handle_api_directories(path, query_params)
-        elif path == "/api/search":
-            self._handle_api_search(query_params)
-        elif path.startswith("/api/download"):
-            self._handle_api_download(path)
-        elif path == "/api":
-            self._handle_api_docs()
-        else:
-            # 404页面
-            if path.startswith("/api"):
-                # API请求返回JSON格式404
-                self.send_response(404)
-                self.send_header("Content-Type", "application/json; charset=utf-8")
-                import json
+        import threading
+        import time
 
-                error_data = json.dumps(
-                    {
-                        "success": False,
-                        "data": None,
-                        "error": {"code": 404, "message": "API端点未找到"},
-                    },
-                    ensure_ascii=False,
-                )
-                self.send_header("Content-Length", str(len(error_data.encode("utf-8"))))
-                self.send_header("Access-Control-Allow-Origin", "*")
+        # 检查是否为视频流请求（Range请求）或大文件下载
+        is_video_stream = self.headers.get("Range") is not None and path.startswith(
+            "/download"
+        )
+        is_large_file = path.startswith("/download") or path.startswith("/api/download")
+        is_api_request = path.startswith("/api") and not is_large_file
+        is_page_request = path in ["/", "/index", "/search"] or path.startswith(
+            "/browse"
+        )
+
+        def handle_request():
+            """处理请求的内部函数"""
+            if path == "/" or path == "/index":
+                self._handle_index(query_params)
+            elif path == "/search":
+                self._handle_search(query_params)
+            elif path == "/logout":
+                self._handle_logout()
+            elif path == "/.well-known/appspecific/com.chrome.devtools.json":
+                # 处理Chrome DevTools 404请求，减少日志噪音
+                self.send_response(404)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", "0")
                 self.end_headers()
-                self.wfile.write(error_data.encode("utf-8"))
+                return
+            elif path.startswith("/browse"):
+                self._handle_browse(path)
+            elif path.startswith("/download"):
+                self._handle_download(path)
+            elif path.startswith("/static/"):
+                self._handle_static(path)
+            elif path == "/favicon.ico":
+                self._handle_favicon()
+            # API路由
+            elif path.startswith("/api/files"):
+                self._handle_api_files(path, query_params)
+            elif path.startswith("/api/directories"):
+                self._handle_api_directories(path, query_params)
+            elif path == "/api/search":
+                self._handle_api_search(query_params)
+            elif path.startswith("/api/download"):
+                self._handle_api_download(path)
+            elif path == "/api":
+                self._handle_api_docs()
             else:
-                html = HTMLTemplate.get_404_page()
-                self._send_html_response(html, 404)
-            return
+                # 404页面
+                if path.startswith("/api"):
+                    # API请求返回JSON格式404
+                    self.send_response(404)
+                    self.send_header("Content-Type", "application/json; charset=utf-8")
+                    import json
+
+                    error_data = json.dumps(
+                        {
+                            "success": False,
+                            "data": None,
+                            "error": {"code": 404, "message": "API端点未找到"},
+                        },
+                        ensure_ascii=False,
+                    )
+                    self.send_header(
+                        "Content-Length", str(len(error_data.encode("utf-8")))
+                    )
+                    self.send_header("Access-Control-Allow-Origin", "*")
+                    self.end_headers()
+                    self.wfile.write(error_data.encode("utf-8"))
+                else:
+                    html = HTMLTemplate.get_404_page()
+                    self._send_html_response(html, 404)
+                return
+
+        # 对API请求和页面请求添加超时保护，对视频流请求不设置超时
+        if is_api_request or is_page_request:
+            # 设置请求超时时间（5秒）
+            timeout = 5
+            request_completed = False
+
+            def request_handler():
+                nonlocal request_completed
+                try:
+                    handle_request()
+                finally:
+                    request_completed = True
+
+            # 在单独的线程中处理请求
+            thread = threading.Thread(target=request_handler)
+            thread.start()
+            thread.join(timeout)
+
+            if not request_completed:
+                # 请求超时
+                logger.warning(f"请求处理超时: {path}")
+                self.send_response(504)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                html = "<h1>504 Gateway Timeout</h1><p>请求处理超时，请稍后重试。</p>"
+                self.send_header("Content-Length", str(len(html.encode("utf-8"))))
+                self.end_headers()
+                self.wfile.write(html.encode("utf-8"))
+        else:
+            # 视频流请求或大文件下载，不设置超时
+            handle_request()
+
+        # 记录请求处理时间
+        request_end_time = time.time()
+        request_duration = request_end_time - request_start_time
+        logger.info(
+            f"{method}请求处理完成，客户端IP: {client_ip}, 路径: {path}, 耗时: {request_duration:.2f}秒"
+        )
 
     @error_handler
     def do_OPTIONS(self):
@@ -2509,10 +2714,28 @@ class FileServerHandler(BaseHTTPRequestHandler):
     @error_handler
     def do_POST(self):
         """处理POST请求"""
+        import time
+
+        # 记录请求开始时间
+        request_start_time = time.time()
+        client_ip = self.client_address[0]
+        method = "POST"
+        path = self.path
+
+        # 记录请求信息
+        logger.info(f"收到{method}请求，客户端IP: {client_ip}, 路径: {path}")
+
         if self.path == "/login":
             self._handle_login()
         else:
             self._send_error_response(404, "页面未找到")
+
+        # 记录请求处理时间
+        request_end_time = time.time()
+        request_duration = request_end_time - request_start_time
+        logger.info(
+            f"{method}请求处理完成，客户端IP: {client_ip}, 路径: {path}, 耗时: {request_duration:.2f}秒"
+        )
 
     def _handle_api_directories(self, path, query_params):
         """处理API目录请求
@@ -3411,11 +3634,19 @@ class FileServerHandler(BaseHTTPRequestHandler):
                 mimetypes.guess_type(file_path)[0] or "application/octet-stream"
             )
 
-            # 根据文件类型调整传输参数
+            # 根据文件类型和大小调整传输参数
             if content_type.startswith("video/"):
                 # 视频文件使用更大的块大小，提高传输效率
-                chunk_size = 65536  # 64KB块
-                preload_size = 1024 * 1024  # 1MB预加载
+                # 根据文件大小动态调整块大小
+                if file_size < 100 * 1024 * 1024:  # 小于100MB的视频文件
+                    chunk_size = 65536  # 64KB块
+                    preload_size = 1024 * 1024  # 1MB预加载
+                elif file_size < 500 * 1024 * 1024:  # 100MB-500MB的视频文件
+                    chunk_size = 131072  # 128KB块
+                    preload_size = 2 * 1024 * 1024  # 2MB预加载
+                else:  # 大于500MB的视频文件
+                    chunk_size = 262144  # 256KB块
+                    preload_size = 4 * 1024 * 1024  # 4MB预加载
             elif content_type.startswith("audio/"):
                 # 音频文件使用中等块大小
                 chunk_size = 32768  # 32KB块
@@ -3898,7 +4129,7 @@ class FileServer:
                     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
                     context.load_cert_chain(ssl_cert_file, ssl_key_file)
 
-                    self.server = HTTPServer(("0.0.0.0", port), create_handler)
+                    self.server = ThreadingHTTPServer(("0.0.0.0", port), create_handler)
                     self.server.socket = context.wrap_socket(
                         self.server.socket, server_side=True
                     )
@@ -3907,12 +4138,12 @@ class FileServer:
                 else:
                     # 证书不存在，回退到HTTP
                     logger.warning("SSL证书或密钥不存在，回退到HTTP模式")
-                    self.server = HTTPServer(("0.0.0.0", port), create_handler)
+                    self.server = ThreadingHTTPServer(("0.0.0.0", port), create_handler)
                     protocol = "http"
             else:
                 # SSL禁用时，直接使用HTTP服务器
                 logger.info("SSL已禁用，使用HTTP服务器")
-                self.server = HTTPServer(("0.0.0.0", port), create_handler)
+                self.server = ThreadingHTTPServer(("0.0.0.0", port), create_handler)
                 protocol = "http"
 
             self.running = True
