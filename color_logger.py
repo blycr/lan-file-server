@@ -8,9 +8,7 @@
 import sys
 import os
 import logging
-import time
 from datetime import datetime
-from typing import Optional
 
 
 class ColorFormatter(logging.Formatter):
