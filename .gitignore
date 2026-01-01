@@ -134,4 +134,195 @@ lan-file-server-technical-requirements-revised.md
 ssl_cert.pem
 ssl_key.pem
 lan-file-server.wiki/
-.gitattributes
+node_modules/
+
+# Conda environments
+.conda/
+envs/
+*.conda
+conda-env.yml
+environment.yml
+
+# Virtual environments
+venv/
+ENV/
+env/
+env.bak/
+venv.bak/
+
+# Database files
+db.sqlite3
+*.sqlite
+*.sqlite3
+*.db
+*.db-journal
+
+# Runtime files
+*.pid
+*.pid.lock
+*.socket
+
+# Windows specific
+*.lnk
+*.swp
+*.swo
+
+# Linux specific
+.directory
+.Trash-*
+
+# macOS specific
+.AppleDouble
+.LSOverride
+
+# Test files
+*.test
+*.spec
+
+# Build artifacts
+build/
+out/
+
+# Documentation build
+_docs/
+docs/_build/
+
+# Editor directories and files
+.vim/
+.viminfo
+.emacs.d/
+*.sublime-project
+*.sublime-workspace
+*.idea/
+.project
+.classpath
+.c9/
+*.launch
+.settings/
+*.sublime-workspace
+
+# IDE - VSCode
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+*.code-workspace
+
+# IDE - JetBrains
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# IDE - Eclipse
+.metadata/
+*.tmp/
+*.tmpdir/
+
+# Network related
+*.pcap
+*.cap
+
+# Security related
+*.enc
+*.gpg
+*.asc
+
+# Archive related
+*.iso
+*.img
+
+# Audio/video
+*.mp3
+*.mp4
+*.avi
+*.mov
+*.wmv
+*.flv
+
+# Office files
+*.doc
+*.docx
+*.xls
+*.xlsx
+*.ppt
+*.pptx
+
+# Batch files
+*.bat
+*.cmd
+
+# Shell scripts
+*.sh
+*.bash
+*.zsh
+
+# PowerShell scripts
+*.ps1
+*.psd1
+*.psm1
+
+# Registry files
+*.reg
+
+# INF files
+*.inf
+
+# DLL files
+*.dll
+
+# EXE files
+*.exe
+
+# COM files
+*.com
+
+# SYS files
+*.sys
+
+# Application files
+*.app
+*.dmg
+*.pkg
+*.deb
+*.rpm
+
+# Source control
+*.orig
+*.rej
+
+# Diff files
+*.diff
+*.patch
+
+# Language specific
+*.mo
+*.pot
+
+# Internationalization
+*.po
+
+# Localization
+*.l10n
+
+# Translation
+*.xlf
+
+# Misc
+*.swp
+*.swo
+*.bak
+*.old
+*.new
+*.tmp
+*.temp
+*.cache
+*.log
+*.logs
+*.pid
+*.pid.lock
+*.socket
+*.state
+*.state.backup
+
