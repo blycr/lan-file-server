@@ -86,7 +86,7 @@ class ConfigManager:
         # 白名单配置
         self.whitelist_config = {
             'image': ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp'],
-            'audio': ['.wav', '.mp3', '.ogg', '.wma', '.m4a', '.flac'],
+            'audio': ['.wav', '.mp3', '.ogg', '.wma', '.m4a', '.flac'],  # FLAC 是无损音频格式
             'video': ['.mp4', '.mov', '.avi', '.flv', '.mkv', '.wmv', '.mpeg', '.mpg']
         }
         

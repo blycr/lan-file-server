@@ -337,7 +337,7 @@ body {
   text-align: center;
   margin-bottom: var(--spacing-lg);
   width: 100%;
-  max-width: 600px;
+  max-width: 100%;
 }
 
 .page-header h2 {
@@ -655,6 +655,8 @@ body {
 /* ==================== 文件列表样式 ==================== */
 .section {
   margin-bottom: var(--spacing-xl);
+  width: 100%;
+  max-width: 100%;
 }
 
 .section h3 {
@@ -933,7 +935,7 @@ body {
   }
   
   .main-content {
-    max-width: 50%;
+    max-width: 80%;
     margin: 0 auto;
     padding: var(--spacing-lg);
   }
@@ -957,7 +959,7 @@ body {
   }
   
   .search-container {
-    max-width: 600px;
+    max-width: 80%;
   }
   
   .file-item {
