@@ -1917,7 +1917,7 @@ class HTMLTemplate:
     </main>
 
     <footer class="footer glass-effect">
-        <p>&copy; 2025 LAN文件服务器 - 轻量、美观、安全</p>
+        <p>&copy; 2025 LAN文件服务器 - 轻量、美观、安全 | <a href="https://github.com/blycr/lan-file-server" target="_blank" rel="noopener noreferrer" class="github-link">GitHub</a></p>
     </footer>
 </body>
 </html>"""

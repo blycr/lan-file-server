@@ -874,6 +874,18 @@ body {
   margin-top: auto;
 }
 
+.footer .github-link {
+  color: var(--text-muted);
+  text-decoration: none;
+  transition: color var(--transition-time) ease;
+  margin-left: var(--spacing-xs);
+}
+
+.footer .github-link:hover {
+  color: var(--primary-color);
+  text-decoration: underline;
+}
+
 /* ==================== 响应式设计 ==================== */
 
 /* 大屏幕设备 (1024px - 1600px) */
