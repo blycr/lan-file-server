@@ -367,53 +367,60 @@ function Main {
         Write-Host " 6. 退出" -ForegroundColor Gray
         Write-Host ""
         
-        $choice = Read-Host "Enter choice (1-6)"
-        
-        switch ($choice) {
-            "1" {
-                Write-Host "正在启动服务器..." -ForegroundColor Green
-                Start-Server
+        # 循环输入，直到用户提供有效选项
+        $validInput = $false
+        while (-not $validInput) {
+            $choice = Read-Host "Enter choice (1,3,4,5,6)"
+            
+            # 检查输入是否有效
+            if ($choice -in @("1","3","4","5","6")) {
+                $validInput = $true
+                
+                switch ($choice) {
+                    "1" {
+                        Write-Host "正在启动服务器..." -ForegroundColor Green
+                        Start-Server
+                        Write-Host ""
+                        Write-Host "服务器已停止，返回主菜单" -ForegroundColor Green
+                        Write-Host ""
+                        Write-Host "按任意键返回主菜单..." -ForegroundColor Yellow
+                        $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+                    }
+                    "3" {
+                        Write-Host "正在创建桌面快捷方式..." -ForegroundColor Magenta
+                        Create-DesktopShortcut
+                        Write-Host ""
+                        Write-Host "创建完成，按任意键返回主菜单..." -ForegroundColor Cyan
+                        $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+                    }
+                    "4" {
+                        Write-Host "正在检查服务器进程..." -ForegroundColor Red
+                        Force-Stop-Server
+                        Write-Host ""
+                        Write-Host "操作完成，按任意键返回主菜单..." -ForegroundColor Cyan
+                        $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+                    }
+                    "5" {
+                        Write-Host "正在显示帮助信息..." -ForegroundColor Cyan
+                        Show-Help
+                        Write-Host ""
+                        Write-Host "帮助显示完成，按任意键返回主菜单..." -ForegroundColor Cyan
+                        $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+                    }
+                    "6" {
+                        Write-Host "正在退出..." -ForegroundColor Gray
+                        Write-Host "感谢使用 LAN 文件服务器!" -ForegroundColor Cyan
+                        Write-Host ""
+                        $exitScript = $true
+                    }
+                }
+            } else {
+                # 显示中文错误提示
                 Write-Host ""
-                Write-Host "服务器已停止，返回主菜单" -ForegroundColor Green
+                Write-ColorOutput "[错误] 无效的输入！请输入有效的选项。" "Red"
+                Write-ColorOutput "有效选项：1, 3, 4, 5, 6" "White"
                 Write-Host ""
-                Write-Host "按任意键返回主菜单..." -ForegroundColor Yellow
-                $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
-            }
-            "3" {
-                Write-Host "正在创建桌面快捷方式..." -ForegroundColor Magenta
-                Create-DesktopShortcut
-                Write-Host ""
-                Write-Host "创建完成，按任意键返回主菜单..." -ForegroundColor Cyan
-                $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
-            }
-            "4" {
-                Write-Host "正在检查服务器进程..." -ForegroundColor Red
-                Force-Stop-Server
-                Write-Host ""
-                Write-Host "操作完成，按任意键返回主菜单..." -ForegroundColor Cyan
-                $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
-            }
-            "5" {
-                Write-Host "正在显示帮助信息..." -ForegroundColor Cyan
-                Show-Help
-                Write-Host ""
-                Write-Host "帮助显示完成，按任意键返回主菜单..." -ForegroundColor Cyan
-                $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
-            }
-            "6" {
-                Write-Host "正在退出..." -ForegroundColor Gray
-                Write-Host "感谢使用 LAN 文件服务器!" -ForegroundColor Cyan
-                Write-Host ""
-                $exitScript = $true
-            }
-            default {
-                Write-Host "无效选择，默认启动服务器..." -ForegroundColor Yellow
-                Start-Server
-                Write-Host ""
-                Write-Host "服务器已停止，返回主菜单" -ForegroundColor Green
-                Write-Host ""
-                Write-Host "按任意键返回主菜单..." -ForegroundColor Yellow
-                $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+                Write-ColorOutput "请重新输入：" "Yellow"
             }
         }
     }
