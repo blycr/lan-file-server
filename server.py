@@ -5,7 +5,7 @@ import json
 import mimetypes
 import signal
 import logging
-from http.server import HTTPServer, BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs, unquote
 from urllib.parse import quote as urlquote
 from pathlib import Path
@@ -27,6 +27,45 @@ log_level = getattr(
 
 # 初始化富文本日志器
 logger = get_rich_logger("LANFileServer", log_level)
+
+
+# 文件大小格式化缓存
+_size_format_cache = {}
+_MAX_SIZE_CACHE = 100  # 限制缓存条数，内存占用可忽略
+
+
+def format_file_size(size):
+    """缓存文件大小格式化结果，减少重复计算
+
+    Args:
+        size (int): 文件大小（字节）
+
+    Returns:
+        str: 格式化后的文件大小
+    """
+    # 缓存键：文件大小数值（字符串类型，避免类型冲突）
+    cache_key = str(size)
+    if cache_key in _size_format_cache:
+        return _size_format_cache[cache_key]
+
+    # 原有大小格式化逻辑
+    if size == 0:
+        formatted = "0 B"
+    else:
+        for unit in ["B", "KB", "MB", "GB"]:
+            if size < 1024.0:
+                formatted = f"{size:.2f} {unit}"
+                break
+            size /= 1024.0
+        else:
+            formatted = f"{size:.2f} TB"
+
+    # 写入缓存，超出数量时删除最旧条目
+    _size_format_cache[cache_key] = formatted
+    if len(_size_format_cache) > _MAX_SIZE_CACHE:
+        _size_format_cache.pop(next(iter(_size_format_cache)))
+
+    return formatted
 
 
 class HTTPError(Exception):
@@ -1040,9 +1079,7 @@ class FileIndexer:
                             "size": row["size"],
                             "modified_time": row["modified_time"],
                             "extension": row["extension"],
-                            "size_formatted": self.config_manager.format_file_size(
-                                row["size"]
-                            ),
+                            "size_formatted": format_file_size(row["size"]),
                         }
                         index_data["files"].append(file_info)
 
@@ -1586,6 +1623,18 @@ class FileIndexer:
 class HTMLTemplate:
     """HTML模板生成器 - 生成所有页面的HTML内容"""
 
+    # 新增：目录HTML缓存（类级属性，全局复用）
+    _dir_html_cache = {}
+    _CACHE_EXPIRE = 3600  # 缓存1小时（家庭场景足够）
+    _MAX_CACHE_DIRS = 10  # 限制缓存目录数，避免内存占用
+
+    # 新增：缓存清理方法（文件变动时调用）
+    @staticmethod
+    def clear_dir_cache(changed_path):
+        """清理指定目录的HTML缓存"""
+        if changed_path in HTMLTemplate._dir_html_cache:
+            del HTMLTemplate._dir_html_cache[changed_path]
+
     @staticmethod
     def _get_theme_management_js():
         """获取主题管理的JavaScript代码
@@ -1801,14 +1850,12 @@ class HTMLTemplate:
         return HTMLTemplate.get_base_template("登录 - LAN文件服务器", content)
 
     @staticmethod
-    def get_index_page(index_data, search_term="", sort_by="name", sort_order="asc"):
+    def get_index_page(index_data, search_term=""):
         """获取索引页面HTML
 
         Args:
             index_data (dict): 索引数据
             search_term (str): 搜索关键词
-            sort_by (str): 排序字段 (name, size, modified, type)
-            sort_order (str): 排序顺序 (asc, desc)
 
         Returns:
             str: 索引页面HTML
@@ -2064,26 +2111,39 @@ class HTMLTemplate:
             str: 浏览页面HTML
         """
         current_path = listing_data["current_path"]
+        current_time = time.time()
 
-        # 路径导航
-        path_breadcrumbs = ""
-        if current_path:
-            path_parts = current_path.split("/")
-            path_breadcrumbs = '<a href="/index">首页</a>'
+        # 1. 缓存有效性检查
+        if current_path in HTMLTemplate._dir_html_cache:
+            cache_html, cache_time = HTMLTemplate._dir_html_cache[current_path]
+            if current_time - cache_time < HTMLTemplate._CACHE_EXPIRE:
+                # 仅更新统计数（保证数据准确性）
+                total_dirs = len(listing_data["directories"])
+                total_files = len(listing_data["files"])
+                cache_html = cache_html.replace(
+                    r'<div class="stats">当前目录: .*? 个文件夹，.*? 个文件</div>',
+                    f'<div class="stats">当前目录: {total_dirs} 个文件夹，{total_files} 个文件</div>',
+                )
+                title = f"浏览: {current_path if current_path else '根目录'} - LAN文件服务器"
+                return HTMLTemplate.get_base_template(title, cache_html)
+
+        # 简化路径导航生成
+        def generate_breadcrumbs(current_path):
+            """简化面包屑生成逻辑"""
+            if not current_path:
+                return "<span>首页</span>"
+
+            path_parts = [p for p in current_path.split("/") if p]  # 过滤空字符串
+            breadcrumbs = '<a href="/index">首页</a>'
             accumulated_path = ""
 
-            for i, part in enumerate(path_parts):
-                accumulated_path += part + "/" if i < len(path_parts) - 1 else part
-                path_breadcrumbs += f" / <a href='/browse/{
-                    urlquote(
-                        accumulated_path,
-                        encoding='utf-8',
-                        safe='')}'>{part}</a>"
-        else:
-            path_breadcrumbs = "<span>首页</span>"
+            for part in path_parts:
+                accumulated_path += part + "/"
+                breadcrumbs += f' / <a href="/browse/{urlquote(accumulated_path.rstrip("/"), encoding="utf-8", safe="")}">{part}</a>'
 
-        # 移除返回按钮
-        back_button = ""
+            return breadcrumbs
+
+        path_breadcrumbs = generate_breadcrumbs(current_path)
 
         # 统计信息
         total_dirs = len(listing_data["directories"])
@@ -2093,15 +2153,7 @@ class HTMLTemplate:
         current_sort_by = listing_data.get("sort_by", "name")
         current_sort_order = listing_data.get("sort_order", "asc")
 
-        # 排序选择器 - 添加排序状态视觉指示
-        sort_indicator = {
-            "name": "名称",
-            "size": "大小",
-            "modified": "修改时间",
-            "type": "文件类型",
-        }.get(current_sort_by, "名称")
-
-        order_indicator = "↑" if current_sort_order == "asc" else "↓"
+        # 排序选择器
 
         sort_html = f"""
         <div class="sort-container">
@@ -2157,10 +2209,20 @@ class HTMLTemplate:
                 total_files=total_files
             )
 
+            # 简化文件类型图标获取
+            def get_file_icon(file_type):
+                """简化文件类型图标获取"""
+                if file_type == "image":
+                    return "🖼️"
+                elif file_type == "audio":
+                    return "🎵"
+                elif file_type == "video":
+                    return "🎬"
+                else:
+                    return "📄"
+
             for file_info in listing_data["files"]:
-                type_icon = {"image": "🖼️", "audio": "🎵", "video": "🎬"}.get(
-                    file_info["type"], "📄"
-                )
+                type_icon = get_file_icon(file_info["type"])
 
                 files_html += f"""
                     <li class="file-item file" data-size="{file_info['size']}">
@@ -2196,7 +2258,6 @@ class HTMLTemplate:
                     <div class="path-navigation">
                         {path_breadcrumbs}
                     </div>
-                    {back_button}
                 </div>
 
                 {search_html}
@@ -2240,6 +2301,10 @@ class HTMLTemplate:
             }}
         </script>
         """
+
+        # 3. 缓存生成的HTML（仅核心目录）
+        if len(HTMLTemplate._dir_html_cache) < HTMLTemplate._MAX_CACHE_DIRS:
+            HTMLTemplate._dir_html_cache[current_path] = (content, current_time)
 
         return HTMLTemplate.get_base_template(title, content)
 
@@ -2296,7 +2361,18 @@ class HTMLTemplate:
 
 
 class FileServerHandler(BaseHTTPRequestHandler):
-    """文件服务器请求处理器"""
+    """文件服务器请求处理器
+
+    处理所有HTTP请求，包括页面请求、API请求、文件下载等。
+    提供安全认证、文件管理、搜索等功能。
+
+    Attributes:
+        config_manager: 配置管理器实例
+        auth_manager: 认证管理器实例
+        file_indexer: 文件索引器实例
+        share_dir: 共享目录路径
+        static_dir: 静态文件目录路径
+    """
 
     def __init__(self, *args, config_manager=None, **kwargs):
         self.config_manager = config_manager
@@ -2496,10 +2572,7 @@ class FileServerHandler(BaseHTTPRequestHandler):
         import threading
         import time
 
-        # 检查是否为视频流请求（Range请求）或大文件下载
-        is_video_stream = self.headers.get("Range") is not None and path.startswith(
-            "/download"
-        )
+        # 检查是否为大文件下载或API请求
         is_large_file = path.startswith("/download") or path.startswith("/api/download")
         is_api_request = path.startswith("/api") and not is_large_file
         is_page_request = path in ["/", "/index", "/search"] or path.startswith(
@@ -3304,7 +3377,7 @@ class FileServerHandler(BaseHTTPRequestHandler):
         index_data = self.file_indexer.generate_index(
             search_term, sort_by=sort_by, sort_order=sort_order
         )
-        html = HTMLTemplate.get_index_page(index_data, search_term, sort_by, sort_order)
+        html = HTMLTemplate.get_index_page(index_data, search_term)
         self._send_html_response(html)
 
     def _handle_search(self, query_params):
@@ -3325,7 +3398,7 @@ class FileServerHandler(BaseHTTPRequestHandler):
         index_data = self.file_indexer.generate_index(
             search_term, sort_by=sort_by, sort_order=sort_order
         )
-        html = HTMLTemplate.get_index_page(index_data, search_term, sort_by, sort_order)
+        html = HTMLTemplate.get_index_page(index_data, search_term)
         self._send_html_response(html)
 
     def _handle_browse(self, path):
@@ -3877,14 +3950,42 @@ class FileServerHandler(BaseHTTPRequestHandler):
     def _send_html_response(self, html_content, status_code=200):
         """发送HTML响应
 
+        向客户端发送HTML格式的响应，包括设置适当的响应头和状态码。
+
         Args:
-            html_content (str): HTML内容
-            status_code (int): HTTP状态码
+            html_content (str): HTML内容字符串
+            status_code (int): HTTP状态码，默认为200
+
+        Returns:
+            None
+
+        Raises:
+            Exception: 发送响应时可能发生的任何异常
         """
         try:
             self.send_response(status_code)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(html_content.encode("utf-8"))))
+
+            # 添加浏览器缓存头（浏览页面缓存10分钟）
+            self.send_header("Cache-Control", "public, max-age=600")
+            self.send_header(
+                "Expires",
+                time.strftime(
+                    "%a, %d %b %Y %H:%M:%S GMT", time.gmtime(time.time() + 600)
+                ),
+            )
+
+            # 添加安全响应头
+            self.send_header(
+                "Content-Security-Policy",
+                "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; object-src 'none'",
+            )
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("X-Frame-Options", "SAMEORIGIN")
+            self.send_header("X-XSS-Protection", "1; mode=block")
+            self.send_header("Referrer-Policy", "strict-origin-when-cross-origin")
+
             self.end_headers()
             self.wfile.write(html_content.encode("utf-8"))
         except Exception as e:
@@ -3918,9 +4019,18 @@ class FileServerHandler(BaseHTTPRequestHandler):
     def _send_json_response(self, data, status_code=200):
         """发送JSON格式响应
 
+        向客户端发送JSON格式的响应，包括设置适当的响应头和状态码。
+        响应格式遵循统一的API格式：{"success": true/false, "data": ..., "error": ...}
+
         Args:
             data (dict): 响应数据
-            status_code (int): HTTP状态码
+            status_code (int): HTTP状态码，默认为200
+
+        Returns:
+            None
+
+        Raises:
+            Exception: 发送响应时可能发生的任何异常
         """
         try:
             import json
@@ -3936,6 +4046,13 @@ class FileServerHandler(BaseHTTPRequestHandler):
             self.send_header(
                 "Access-Control-Allow-Headers", "Content-Type, Authorization"
             )
+
+            # 添加安全响应头
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("X-Frame-Options", "SAMEORIGIN")
+            self.send_header("X-XSS-Protection", "1; mode=block")
+            self.send_header("Referrer-Policy", "strict-origin-when-cross-origin")
+
             self.end_headers()
             self.wfile.write(json_data.encode("utf-8"))
         except Exception as e:
@@ -4230,7 +4347,7 @@ class FileServer:
 server_instance = None
 
 
-def signal_handler(signum, frame):
+def signal_handler(signum, _frame):
     """信号处理器"""
     logger.info(f"\n收到信号 {signum}，正在退出...")
     if server_instance:
