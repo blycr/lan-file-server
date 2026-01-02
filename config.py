@@ -647,7 +647,21 @@ class ConfigManager:
         Returns:
             bool: 是否为白名单文件
         """
-        file_ext = Path(file_path).suffix.lower()
+        file_path_obj = Path(file_path)
+        file_name = file_path_obj.name
+        file_ext = file_path_obj.suffix.lower()
+
+        # 处理以点开头的文件名，如 .mp4 或 .test.mp4
+        if file_name.startswith(".") and len(file_name) > 1:
+            # 对于 .mp4 这样的文件名，直接将其视为 .mp4 后缀
+            if len(file_name) > 2 and "." in file_name[1:]:
+                # 对于 .test.mp4 这样的文件名，提取实际后缀 .mp4
+                actual_ext = "." + file_name.split(".")[-1]
+            else:
+                # 对于 .mp4 这样的文件名，直接使用文件名作为后缀
+                actual_ext = file_name.lower()
+            return actual_ext in self.ALL_WHITELIST_EXTENSIONS
+
         return file_ext in self.ALL_WHITELIST_EXTENSIONS
 
     def get_file_type(self, file_path):
@@ -659,7 +673,23 @@ class ConfigManager:
         Returns:
             str: 文件类型 ('image', 'audio', 'video', 'other')
         """
-        file_ext = Path(file_path).suffix.lower()
+        file_path_obj = Path(file_path)
+        file_name = file_path_obj.name
+        file_ext = file_path_obj.suffix.lower()
+
+        # 处理以点开头的文件名，如 .mp4 或 .test.mp4
+        if file_name.startswith(".") and len(file_name) > 1:
+            # 对于 .mp4 这样的文件名，直接将其视为 .mp4 后缀
+            if len(file_name) > 2 and "." in file_name[1:]:
+                # 对于 .test.mp4 这样的文件名，提取实际后缀 .mp4
+                actual_ext = "." + file_name.split(".")[-1]
+            else:
+                # 对于 .mp4 这样的文件名，直接使用文件名作为后缀
+                actual_ext = file_name.lower()
+            for file_type, extensions in self.whitelist_config.items():
+                if actual_ext in extensions:
+                    return file_type
+            return "other"
 
         for file_type, extensions in self.whitelist_config.items():
             if file_ext in extensions:

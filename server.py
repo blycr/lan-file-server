@@ -15,12 +15,12 @@ from datetime import datetime, timedelta
 
 # 添加正确的MIME类型映射
 mimetypes.add_type("video/x-msvideo", ".avi")  # 标准.avi文件MIME类型
-mimetypes.add_type("video/mp4", ".mp4")      # 确保mp4映射正确
-mimetypes.add_type("video/webm", ".webm")    # 确保webm映射正确
-mimetypes.add_type("video/ogg", ".ogg")      # 确保ogg映射正确
+mimetypes.add_type("video/mp4", ".mp4")  # 确保mp4映射正确
+mimetypes.add_type("video/webm", ".webm")  # 确保webm映射正确
+mimetypes.add_type("video/ogg", ".ogg")  # 确保ogg映射正确
 mimetypes.add_type("video/x-matroska", ".mkv")  # 确保mkv映射正确
 mimetypes.add_type("video/x-ms-wmv", ".wmv")  # 确保wmv映射正确
-mimetypes.add_type("video/x-flv", ".flv")    # 确保flv映射正确
+mimetypes.add_type("video/x-flv", ".flv")  # 确保flv映射正确
 
 from config import get_config_manager
 from color_logger import get_rich_logger
@@ -616,9 +616,35 @@ class FileIndexer:
                 try:
                     with os.scandir(str(dir_path)) as scandir_iter:
                         for item in scandir_iter:
-                            # 跳过隐藏文件和目录
+                            # 处理以点开头的文件和目录
                             if item.name.startswith("."):
-                                continue
+                                if item.is_dir():
+                                    # 跳过隐藏目录
+                                    continue
+                                else:
+                                    # 对于以点开头的文件，允许白名单内的文件（如 .mp4）
+                                    file_path = Path(item.path)
+                                    file_name = file_path.name
+                                    file_ext = file_path.suffix.lower()
+
+                                    # 检查是否为白名单文件
+                                    is_whitelisted = False
+                                    if file_name.startswith(".") and len(file_name) > 1:
+                                        # 对于 .mp4 这样的文件名，检查文件名本身是否在白名单中
+                                        dot_ext = file_name.lower()
+                                        is_whitelisted = (
+                                            dot_ext
+                                            in self.config_manager.ALL_WHITELIST_EXTENSIONS
+                                        )
+                                    else:
+                                        is_whitelisted = (
+                                            file_ext
+                                            in self.config_manager.ALL_WHITELIST_EXTENSIONS
+                                        )
+
+                                    if not is_whitelisted:
+                                        # 跳过不在白名单中的隐藏文件
+                                        continue
 
                             # 确保item_name使用UTF-8编码
                             try:
@@ -1091,7 +1117,17 @@ class FileIndexer:
                     index_data["directories"].append(dir_info)
                 else:
                     # 文件 - 只显示白名单内的文件
+                    is_file_whitelisted = False
                     if row["extension"] in self.config_manager.ALL_WHITELIST_EXTENSIONS:
+                        is_file_whitelisted = True
+                    elif row["name"].startswith(".") and len(row["name"]) > 1:
+                        # 对于点前缀文件，检查文件名本身是否在白名单中
+                        dot_ext = row["name"].lower()
+                        is_file_whitelisted = (
+                            dot_ext in self.config_manager.ALL_WHITELIST_EXTENSIONS
+                        )
+
+                    if is_file_whitelisted:
                         file_info = {
                             "name": row["name"],
                             "path": row["path"],
@@ -1099,7 +1135,11 @@ class FileIndexer:
                             "type": row["type"],
                             "size": row["size"],
                             "modified_time": row["modified_time"],
-                            "extension": row["extension"],
+                            "extension": (
+                                row["extension"]
+                                if row["extension"]
+                                else row["name"].lower()
+                            ),
                             "size_formatted": format_file_size(row["size"]),
                         }
                         index_data["files"].append(file_info)
@@ -1213,15 +1253,39 @@ class FileIndexer:
                 return
 
             for item in items:
-                # 快速跳过隐藏文件和目录（以.开头）
-                if item.name.startswith("."):
-                    continue
                 # 确保item_name使用UTF-8编码，处理所有Unicode字符
                 try:
                     item_name = str(item.name)
                 except UnicodeDecodeError:
                     logger.warning(f"文件名编码错误，跳过: {item}")
                     continue
+
+                # 处理以点开头的文件：跳过隐藏目录，但允许白名单文件（如 .mp4）
+                if item.name.startswith("."):
+                    if item.is_dir():
+                        # 跳过隐藏目录
+                        continue
+                    else:
+                        # 对于以点开头的文件，检查是否在白名单中
+                        file_path = Path(item.path)
+                        file_name = file_path.name
+                        file_ext = file_path.suffix.lower()
+
+                        # 处理 .mp4 这样的文件名，直接将其视为 .mp4 后缀
+                        is_whitelisted = False
+                        if file_name.startswith(".") and len(file_name) > 1:
+                            dot_ext = file_name.lower()
+                            is_whitelisted = (
+                                dot_ext in self.config_manager.ALL_WHITELIST_EXTENSIONS
+                            )
+                        else:
+                            is_whitelisted = (
+                                file_ext in self.config_manager.ALL_WHITELIST_EXTENSIONS
+                            )
+
+                        if not is_whitelisted:
+                            # 跳过不在白名单中的隐藏文件
+                            continue
 
                 # 正确构造相对路径：确保与share_dir的关联性
                 if relative_path and relative_path.strip():
@@ -1547,13 +1611,23 @@ class FileIndexer:
                     if not self.config_manager.is_whitelisted_file(str(item)):
                         continue
 
+                    # 处理点前缀文件的扩展名
+                    file_ext = item.suffix.lower()
+                    if (
+                        not file_ext
+                        and item_name.startswith(".")
+                        and len(item_name) > 1
+                    ):
+                        # 对于 .mp4 这样的文件名，使用文件名本身作为扩展名
+                        file_ext = item_name.lower()
+
                     file_info = {
                         "name": item_name,
                         "path": item_path,
                         "type": self.config_manager.get_file_type(str(item)),
                         "size": size,
                         "size_formatted": self.config_manager.format_file_size(size),
-                        "extension": item.suffix.lower(),
+                        "extension": file_ext,
                         "modified_time": modified_time,
                     }
                     listing_data["files"].append(file_info)
@@ -3544,10 +3618,42 @@ class FileServerHandler(BaseHTTPRequestHandler):
 
             # 大文件处理：支持流式传输
             file_size = os.path.getsize(file_info["full_path"])
-            content_type = (
-                mimetypes.guess_type(file_info["full_path"])[0]
-                or "application/octet-stream"
+
+            # 优先使用我们的自定义MIME类型映射
+            content_type = None
+            file_path_lower = file_info["full_path"].lower()
+            file_name = os.path.basename(file_path_lower)
+
+            # 视频扩展名列表，包括点开头的文件名情况
+            video_exts = [
+                ".mp4",
+                ".mkv",
+                ".avi",
+                ".mov",
+                ".wmv",
+                ".flv",
+                ".webm",
+                ".ogg",
+            ]
+
+            # 检查文件名是否为以点开头的视频文件，如 .mp4
+            is_dot_video_file = file_name.startswith(".") and file_name in video_exts
+
+            # 检查文件是否以视频扩展名结尾
+            ends_with_video_ext = any(
+                file_path_lower.endswith(ext) for ext in video_exts
             )
+
+            if is_dot_video_file or ends_with_video_ext:
+                # 将所有视频格式统一设置为video/mp4
+                content_type = "video/mp4"
+
+            # 如果没有匹配到预定义的视频类型，则使用mimetypes.guess_type
+            if content_type is None:
+                content_type = (
+                    mimetypes.guess_type(file_info["full_path"])[0]
+                    or "application/octet-stream"
+                )
 
             # 检测文件类型决定是否inline显示
             # 增强文件预览支持，添加更多文件类型
@@ -3568,6 +3674,7 @@ class FileServerHandler(BaseHTTPRequestHandler):
                 "video/x-msvideo",  # 标准.avi文件MIME类型
                 "video/mov",
                 "video/mkv",
+                "video/x-matroska",  # MKV文件的实际MIME类型
                 "video/wmv",
                 "video/flv",
                 # 音频类型
@@ -3599,7 +3706,45 @@ class FileServerHandler(BaseHTTPRequestHandler):
                 # 其他可预览类型
                 "application/rtf",
             }
-            is_inline = content_type in inline_types or content_type.startswith("text/")
+            # 简化逻辑：强制所有视频文件使用inline预览
+            # 直接检查文件扩展名，绕过MIME类型判断的复杂性
+            file_path_lower = file_info["full_path"].lower()
+            file_name = os.path.basename(file_path_lower)
+            video_exts = (
+                ".mp4",
+                ".mkv",
+                ".avi",
+                ".mov",
+                ".wmv",
+                ".flv",
+                ".webm",
+                ".ogg",
+            )
+
+            # 检查文件名是否为以点开头的视频文件，如 .mp4
+            is_dot_video_file = file_name.startswith(".") and file_name in video_exts
+
+            # 检查文件是否以视频扩展名结尾
+            ends_with_video_ext = file_path_lower.endswith(video_exts)
+
+            is_video_file = is_dot_video_file or ends_with_video_ext
+
+            # 原有逻辑加上视频文件强制inline
+            is_inline = (
+                content_type in inline_types
+                or content_type.startswith("text/")
+                or is_video_file
+            )
+
+            # 调试日志：输出所有视频文件的实际MIME类型
+            if is_video_file:
+                logger.info(f"视频文件: {file_info['full_path']}")
+                logger.info(f"最终MIME类型: {content_type}")
+                logger.info(f"is_video_file: {is_video_file}")
+                logger.info(f"is_inline最终判断: {is_inline}")
+                logger.info(
+                    f"Content-Disposition将设置: {'inline' if is_inline else 'attachment'}"
+                )
 
             # 处理Range请求
             if range_info:
