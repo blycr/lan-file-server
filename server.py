@@ -2118,9 +2118,16 @@ class HTMLTemplate:
         current_path = listing_data["current_path"]
         current_time = time.time()
 
+        # 获取当前排序信息
+        current_sort_by = listing_data.get("sort_by", "name")
+        current_sort_order = listing_data.get("sort_order", "asc")
+
+        # 生成缓存键，包含排序参数
+        cache_key = f"{current_path}_{current_sort_by}_{current_sort_order}"
+
         # 1. 缓存有效性检查
-        if current_path in HTMLTemplate._dir_html_cache:
-            cache_html, cache_time = HTMLTemplate._dir_html_cache[current_path]
+        if cache_key in HTMLTemplate._dir_html_cache:
+            cache_html, cache_time = HTMLTemplate._dir_html_cache[cache_key]
             if current_time - cache_time < HTMLTemplate._CACHE_EXPIRE:
                 # 仅更新统计数（保证数据准确性）
                 total_dirs = len(listing_data["directories"])
@@ -2309,7 +2316,7 @@ class HTMLTemplate:
 
         # 3. 缓存生成的HTML（仅核心目录）
         if len(HTMLTemplate._dir_html_cache) < HTMLTemplate._MAX_CACHE_DIRS:
-            HTMLTemplate._dir_html_cache[current_path] = (content, current_time)
+            HTMLTemplate._dir_html_cache[cache_key] = (content, current_time)
 
         return HTMLTemplate.get_base_template(title, content)
 
@@ -2600,7 +2607,7 @@ class FileServerHandler(BaseHTTPRequestHandler):
                 self.end_headers()
                 return
             elif path.startswith("/browse"):
-                self._handle_browse(path)
+                self._handle_browse(path, query_params)
             elif path.startswith("/download"):
                 self._handle_download(path)
             elif path.startswith("/static/"):
@@ -3406,7 +3413,7 @@ class FileServerHandler(BaseHTTPRequestHandler):
         html = HTMLTemplate.get_index_page(index_data, search_term)
         self._send_html_response(html)
 
-    def _handle_browse(self, path):
+    def _handle_browse(self, path, query_params):
         """处理目录浏览请求"""
         # 提取相对路径
         relative_path = path[8:]  # 移除 "/browse/" 前缀
@@ -3421,10 +3428,6 @@ class FileServerHandler(BaseHTTPRequestHandler):
             html = HTMLTemplate.get_404_page()
             self._send_html_response(html, 404)
             return
-
-        # 获取查询参数中的排序参数
-        parsed_url = urlparse(self.path)
-        query_params = parse_qs(parsed_url.query)
 
         # 获取排序参数，默认按名称升序
         sort_by = query_params.get("sort_by", ["name"])[0]
