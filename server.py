@@ -13,6 +13,15 @@ import threading
 import time
 from datetime import datetime, timedelta
 
+# 添加正确的MIME类型映射
+mimetypes.add_type("video/x-msvideo", ".avi")  # 标准.avi文件MIME类型
+mimetypes.add_type("video/mp4", ".mp4")      # 确保mp4映射正确
+mimetypes.add_type("video/webm", ".webm")    # 确保webm映射正确
+mimetypes.add_type("video/ogg", ".ogg")      # 确保ogg映射正确
+mimetypes.add_type("video/x-matroska", ".mkv")  # 确保mkv映射正确
+mimetypes.add_type("video/x-ms-wmv", ".wmv")  # 确保wmv映射正确
+mimetypes.add_type("video/x-flv", ".flv")    # 确保flv映射正确
+
 from config import get_config_manager
 from color_logger import get_rich_logger
 
@@ -340,7 +349,9 @@ class FileIndexer:
 
     def __init__(self, config_manager):
         self.config_manager = config_manager
-        self.share_dir = Path(config_manager.server_config["SHARE_DIR"])
+        self.share_dirs = [
+            Path(dir) for dir in config_manager.server_config["SHARE_DIRS"]
+        ]
         self.cache = {}
         self.cache_time = 0
         self.cache_duration = 300  # 5分钟缓存
@@ -581,7 +592,7 @@ class FileIndexer:
 
     def _populate_sqlite_db(self):
         """增量更新SQLite数据库 - 只更新变化的文件和目录"""
-        if not self.sqlite_enabled or not self.share_dir.exists():
+        if not self.sqlite_enabled:
             return
 
         logger.info("开始增量更新SQLite数据库...")
@@ -600,7 +611,7 @@ class FileIndexer:
             # 存储当前扫描到的所有文件和目录路径
             current_files = set()
 
-            def scan_directory_recursive(dir_path, relative_path=""):
+            def scan_directory_recursive(share_dir, dir_path, relative_path=""):
                 """递归扫描目录"""
                 try:
                     with os.scandir(str(dir_path)) as scandir_iter:
@@ -626,7 +637,7 @@ class FileIndexer:
 
                             # 检查路径安全性
                             if not self.config_manager.is_path_safe(
-                                str(item), str(self.share_dir)
+                                str(item), str(share_dir)
                             ):
                                 logger.warning(f"跳过不安全的路径: {item}")
                                 continue
@@ -675,7 +686,9 @@ class FileIndexer:
                                         logger.error(f"更新目录失败: {item} - {e}")
 
                                 # 递归扫描子目录 - 传递实际路径而不是DirEntry对象
-                                scan_directory_recursive(item.path, item_relative_path)
+                                scan_directory_recursive(
+                                    share_dir, item.path, item_relative_path
+                                )
 
                             elif item.is_file():
                                 # 文件处理
@@ -720,8 +733,11 @@ class FileIndexer:
                 except Exception as e:
                     logger.error(f"扫描目录失败: {dir_path} - {e}")
 
-            # 开始扫描根目录
-            scan_directory_recursive(self.share_dir)
+            # 遍历所有共享目录
+            for share_dir in self.share_dirs:
+                if share_dir.exists():
+                    # 开始扫描根目录
+                    scan_directory_recursive(share_dir, share_dir)
 
             # 删除数据库中存在但当前文件系统中不存在的文件和目录
             files_to_delete = db_files.keys() - current_files
@@ -873,7 +889,8 @@ class FileIndexer:
             "files": [],
         }
 
-        if not self.share_dir.exists():
+        # 检查是否有可用的共享目录
+        if not self.share_dirs:
             return index_data
 
         try:
@@ -901,7 +918,11 @@ class FileIndexer:
 
             # SQLite索引未命中或禁用，回退到传统文件系统遍历
             # 只显示根目录内容，模仿手机文件管理器体验
-            self._index_directory_flat(self.share_dir, "", index_data, search_term)
+            for share_dir in self.share_dirs:
+                if share_dir.exists():
+                    self._index_directory_flat(
+                        share_dir, share_dir, "", index_data, search_term
+                    )
 
             # 为文件添加修改时间信息
             for file_info in index_data["files"]:
@@ -1156,10 +1177,13 @@ class FileIndexer:
             except Exception as e:
                 logger.error(f"写入磁盘缓存失败: {e}")
 
-    def _index_directory_flat(self, dir_path, relative_path, index_data, search_term):
+    def _index_directory_flat(
+        self, share_dir, dir_path, relative_path, index_data, search_term
+    ):
         """扁平化索引目录 - 正常浏览只显示当前目录，搜索时递归搜索所有子目录
 
         Args:
+            share_dir (Path): 共享目录路径
             dir_path (Path): 目录路径
             relative_path (str): 相对路径
             index_data (dict): 索引数据
@@ -1168,7 +1192,7 @@ class FileIndexer:
         try:
             # 严格检查目录是否在共享目录内
             dir_str = str(dir_path)
-            if not self.config_manager.is_path_safe(dir_str, str(self.share_dir)):
+            if not self.config_manager.is_path_safe(dir_str, str(share_dir)):
                 logger.warning(f"跳过目录遍历攻击尝试: {dir_path}")
                 return
 
@@ -1207,9 +1231,7 @@ class FileIndexer:
 
                 # 只有在搜索时才检查子目录的路径安全性，正常浏览时信任父目录检查
                 if search_term:
-                    if not self.config_manager.is_path_safe(
-                        str(item), str(self.share_dir)
-                    ):
+                    if not self.config_manager.is_path_safe(str(item), str(share_dir)):
                         logger.warning(f"跳过不安全的路径: {item}")
                         continue
 
@@ -1238,7 +1260,11 @@ class FileIndexer:
                     if search_lower:
                         # 传递实际路径而不是DirEntry对象
                         self._index_directory_flat(
-                            item.path, item_relative_path, index_data, search_term
+                            share_dir,
+                            item.path,
+                            item_relative_path,
+                            index_data,
+                            search_term,
                         )
 
                     # 插入目录到SQLite数据库
@@ -1457,12 +1483,21 @@ class FileIndexer:
         Returns:
             dict: 目录列表数据
         """
-        target_dir = self.share_dir / dir_path if dir_path else self.share_dir
+        # 遍历所有共享目录，查找匹配的目录
+        target_dir = None
+        target_share_dir = None
 
-        if not self.config_manager.is_path_safe(str(target_dir), str(self.share_dir)):
+        for share_dir in self.share_dirs:
+            current_target_dir = share_dir / dir_path if dir_path else share_dir
+            if current_target_dir.exists() and current_target_dir.is_dir():
+                target_dir = current_target_dir
+                target_share_dir = share_dir
+                break
+
+        if not target_dir:
             return None
 
-        if not target_dir.exists() or not target_dir.is_dir():
+        if not self.config_manager.is_path_safe(str(target_dir), str(target_share_dir)):
             return None
 
         listing_data = {
@@ -1582,43 +1617,48 @@ class FileIndexer:
             dict: 文件信息或None
         """
         try:
-            # 确保文件路径是安全的
-            target_file = self.share_dir / file_path
+            # 遍历所有共享目录，查找文件
+            for share_dir in self.share_dirs:
+                # 确保文件路径是安全的
+                target_file = share_dir / file_path
 
-            if not self.config_manager.is_path_safe(
-                str(target_file), str(self.share_dir)
-            ):
-                logger.warning(f"文件路径不安全: {file_path}")
-                return None
+                if not self.config_manager.is_path_safe(
+                    str(target_file), str(share_dir)
+                ):
+                    logger.warning(f"文件路径不安全: {file_path}")
+                    continue
 
-            if not target_file.exists() or not target_file.is_file():
-                logger.warning(f"文件不存在或不是文件: {target_file}")
-                return None
+                if target_file.exists() and target_file.is_file():
+                    # 检查文件是否在白名单中
+                    if not self.config_manager.is_whitelisted_file(str(target_file)):
+                        logger.debug(f"文件不在白名单中: {target_file}")
+                        continue
 
-            # 检查文件是否在白名单中
-            if not self.config_manager.is_whitelisted_file(str(target_file)):
-                logger.debug(f"文件不在白名单中: {target_file}")
-                return None
+                    # 获取文件统计信息
+                    stat = target_file.stat()
 
-            # 获取文件统计信息
-            stat = target_file.stat()
+                    # 使用Path.name确保正确处理中文文件名
+                    file_name = target_file.name
 
-            # 使用Path.name确保正确处理中文文件名
-            file_name = target_file.name
+                    file_info = {
+                        "name": file_name,
+                        "path": file_path,
+                        "full_path": str(target_file),
+                        "type": self.config_manager.get_file_type(str(target_file)),
+                        "size": stat.st_size,
+                        "size_formatted": self.config_manager.format_file_size(
+                            stat.st_size
+                        ),
+                        "extension": target_file.suffix.lower(),
+                        "modified_time": stat.st_mtime,
+                    }
 
-            file_info = {
-                "name": file_name,
-                "path": file_path,
-                "full_path": str(target_file),
-                "type": self.config_manager.get_file_type(str(target_file)),
-                "size": stat.st_size,
-                "size_formatted": self.config_manager.format_file_size(stat.st_size),
-                "extension": target_file.suffix.lower(),
-                "modified_time": stat.st_mtime,
-            }
+                    logger.debug(f"成功获取文件信息: {file_name}")
+                    return file_info
 
-            logger.debug(f"成功获取文件信息: {file_name}")
-            return file_info
+            # 所有共享目录都未找到文件
+            logger.warning(f"文件不存在或不是文件: {file_path}")
+            return None
 
         except Exception as e:
             logger.error(f"获取文件信息时出错: {file_path} - {e}")
@@ -2393,11 +2433,13 @@ class FileServerHandler(BaseHTTPRequestHandler):
 
         # 设置静态文件目录
         if config_manager:
-            self.share_dir = Path(config_manager.server_config["SHARE_DIR"])
+            self.share_dirs = [
+                Path(dir) for dir in config_manager.server_config["SHARE_DIRS"]
+            ]
             # 静态文件目录指向项目根目录下的static文件夹
             self.static_dir = Path(__file__).parent / "static"
         else:
-            self.share_dir = Path(".")
+            self.share_dirs = [Path(".")]
             self.static_dir = Path(".") / "static"
 
         super().__init__(*args, **kwargs)
@@ -3486,9 +3528,15 @@ class FileServerHandler(BaseHTTPRequestHandler):
         # 发送文件
         try:
             # 再次检查文件路径安全性
-            if not self.config_manager.is_path_safe(
-                file_info["full_path"], str(self.file_indexer.share_dir)
-            ):
+            is_safe = False
+            for share_dir in self.file_indexer.share_dirs:
+                if self.config_manager.is_path_safe(
+                    file_info["full_path"], str(share_dir)
+                ):
+                    is_safe = True
+                    break
+
+            if not is_safe:
                 logger.warning(f"下载请求路径不安全: {file_info['full_path']}")
                 html = HTMLTemplate.get_404_page()
                 self._send_html_response(html, 404)
@@ -3517,6 +3565,7 @@ class FileServerHandler(BaseHTTPRequestHandler):
                 "video/webm",
                 "video/ogg",
                 "video/avi",
+                "video/x-msvideo",  # 标准.avi文件MIME类型
                 "video/mov",
                 "video/mkv",
                 "video/wmv",
@@ -4278,7 +4327,7 @@ class FileServer:
             logger.info(f"局域网访问: {protocol}://[本机IP]:{port}")
             logger.info(
                 f"共享目录: {
-                    self.config_manager.server_config['SHARE_DIR']}"
+                    self.config_manager.server_config['SHARE_DIRS']}"
             )
             logger.info(
                 f"白名单文件类型: {len(self.config_manager.ALL_WHITELIST_EXTENSIONS)} 种"
@@ -4291,7 +4340,7 @@ class FileServer:
             logger.success(f"局域网访问: {protocol}://[本机IP]:{port}")
             logger.info(
                 f"共享目录: {
-                    self.config_manager.server_config['SHARE_DIR']}"
+                    self.config_manager.server_config['SHARE_DIRS']}"
             )
             logger.info(
                 f"白名单文件类型: {len(self.config_manager.ALL_WHITELIST_EXTENSIONS)} 种"

@@ -46,7 +46,7 @@ class ConfigManager:
         self.server_config = {
             "PORT": 8000,
             "MAX_CONCURRENT_THREADS": 10,
-            "SHARE_DIR": self._get_default_share_dir(),
+            "SHARE_DIRS": [self._get_default_share_dir()],
             "SSL_ENABLED": False,
             "SSL_CERT_FILE": "",
             "SSL_KEY_FILE": "",
@@ -314,7 +314,16 @@ class ConfigManager:
             server_config = config_data["server"]
             server_config.setdefault("port", 8000)
             server_config.setdefault("max_concurrent_threads", 10)
-            server_config.setdefault("share_dir", self._get_default_share_dir())
+
+            # 处理共享目录配置，支持从share_dir转换为share_dirs
+            if "share_dir" in server_config:
+                # 将单个share_dir转换为share_dirs数组
+                server_config["share_dirs"] = [
+                    server_config.get("share_dir", self._get_default_share_dir())
+                ]
+            else:
+                server_config.setdefault("share_dirs", [self._get_default_share_dir()])
+
             server_config.setdefault("ssl_cert_file", "")
             server_config.setdefault("ssl_key_file", "")
             server_config.setdefault("failed_auth_limit", 5)
@@ -330,7 +339,7 @@ class ConfigManager:
             "server": {
                 "port": self.server_config["PORT"],
                 "max_concurrent_threads": self.server_config["MAX_CONCURRENT_THREADS"],
-                "share_dir": self.server_config["SHARE_DIR"],
+                "share_dirs": self.server_config["SHARE_DIRS"],
                 "ssl_enabled": self.server_config["SSL_ENABLED"],
                 "ssl_cert_file": self.server_config["SSL_CERT_FILE"],
                 "ssl_key_file": self.server_config["SSL_KEY_FILE"],
@@ -384,9 +393,17 @@ class ConfigManager:
                     "max_concurrent_threads",
                     self.server_config["MAX_CONCURRENT_THREADS"],
                 )
-                self.server_config["SHARE_DIR"] = server_config.get(
-                    "share_dir", self.server_config["SHARE_DIR"]
-                )
+                # 处理共享目录配置，支持share_dirs数组和单个share_dir字段
+                if "share_dirs" in server_config:
+                    # 使用share_dirs数组
+                    self.server_config["SHARE_DIRS"] = server_config.get(
+                        "share_dirs", [self._get_default_share_dir()]
+                    )
+                elif "share_dir" in server_config:
+                    # 向后兼容，单个share_dir转换为数组
+                    self.server_config["SHARE_DIRS"] = [
+                        server_config.get("share_dir", self._get_default_share_dir())
+                    ]
                 self.server_config["SSL_ENABLED"] = server_config.get(
                     "ssl_enabled", self.server_config["SSL_ENABLED"]
                 )
@@ -499,7 +516,7 @@ class ConfigManager:
                     "max_concurrent_threads": self.server_config[
                         "MAX_CONCURRENT_THREADS"
                     ],
-                    "share_dir": self.server_config["SHARE_DIR"],
+                    "share_dirs": self.server_config["SHARE_DIRS"],
                     "ssl_enabled": self.server_config["SSL_ENABLED"],
                     "ssl_cert_file": self.server_config["SSL_CERT_FILE"],
                     "ssl_key_file": self.server_config["SSL_KEY_FILE"],
