@@ -817,6 +817,8 @@ body {
 }
 
 .action-button {
+  background: var(--button-bg);
+  border: none;
   padding: var(--spacing-md) var(--spacing-lg);
   color: var(--button-text);
   text-decoration: none;

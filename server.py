@@ -1312,7 +1312,7 @@ class FileIndexer:
                             logger.warning(f"搜索匹配错误: {e}")
                             file_matches = False
 
-                    # 对于UI显示，只添加白名单内的文件
+                    # 对于UI显示和文件访问，只添加白名单内的文件
                     if file_ext in self.config_manager.ALL_WHITELIST_EXTENSIONS:
                         if file_matches:
                             # 添加白名单内的文件到搜索结果
@@ -1593,6 +1593,11 @@ class FileIndexer:
 
             if not target_file.exists() or not target_file.is_file():
                 logger.warning(f"文件不存在或不是文件: {target_file}")
+                return None
+
+            # 检查文件是否在白名单中
+            if not self.config_manager.is_whitelisted_file(str(target_file)):
+                logger.debug(f"文件不在白名单中: {target_file}")
                 return None
 
             # 获取文件统计信息
