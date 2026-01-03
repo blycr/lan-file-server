@@ -11,7 +11,12 @@ from urllib.parse import quote as urlquote
 from pathlib import Path
 import threading
 import time
+import psutil
 from datetime import datetime, timedelta
+try:
+    import qrcode
+except ImportError:
+    qrcode = None
 
 # 添加正确的MIME类型映射
 mimetypes.add_type("video/x-msvideo", ".avi")  # 标准.avi文件MIME类型
@@ -2628,7 +2633,13 @@ class FileServerHandler(BaseHTTPRequestHandler):
                         # 基本认证成功
                         pass
                     else:
-                        # 基本认证失败
+                        # 基本认证失败 - 增强错误信息
+                        logger.warning(f"API基本认证失败 - 客户端IP: {self.client_address[0]}")
+                        if username:
+                            logger.info(f"尝试的用户名: {username}")
+                        else:
+                            logger.info("未提供用户名")
+                        
                         self.send_response(401)
                         self.send_header(
                             "WWW-Authenticate", 'Basic realm="LAN File Server API"'
@@ -2644,7 +2655,12 @@ class FileServerHandler(BaseHTTPRequestHandler):
                                 "data": None,
                                 "error": {
                                     "code": 401,
-                                    "message": "未授权访问，请提供有效的认证信息",
+                                    "message": "认证失败：用户名或密码错误。请检查当前时间格式密码（格式：YYYYMMDDHHMM）",
+                                    "debug_info": {
+                                        "hint": "密码基于当前时间生成，格式为年月日时分，例如：202401031430",
+                                        "timestamp_format": "YYYYMMDDHHMM",
+                                        "current_time": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                                    }
                                 },
                             },
                             ensure_ascii=False,
@@ -2657,7 +2673,9 @@ class FileServerHandler(BaseHTTPRequestHandler):
                         self.wfile.write(error_data.encode("utf-8"))
                         return
                 else:
-                    # 没有提供认证信息
+                    # 没有提供认证信息 - 增强错误信息
+                    logger.warning(f"API请求未提供认证信息 - 客户端IP: {self.client_address[0]}")
+                    
                     self.send_response(401)
                     self.send_header(
                         "WWW-Authenticate", 'Basic realm="LAN File Server API"'
@@ -2671,7 +2689,14 @@ class FileServerHandler(BaseHTTPRequestHandler):
                             "data": None,
                             "error": {
                                 "code": 401,
-                                "message": "未授权访问，请提供有效的认证信息",
+                                "message": "未提供认证信息。请使用基本认证，用户名: admin，密码: 当前时间格式（YYYYMMDDHHMM）",
+                                "debug_info": {
+                                    "hint": "使用基本认证，格式：Authorization: Basic base64(username:password)",
+                                    "username": "admin",
+                                    "password_format": "YYYYMMDDHHMM（当前时间）",
+                                    "example": f"当前时间密码: {datetime.now().strftime('%Y%m%d%H%M')}",
+                                    "current_time": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                                }
                             },
                         },
                         ensure_ascii=False,
@@ -4382,6 +4407,81 @@ class FileServer:
             logger.error(f"生成自签名证书失败: {e}")
             return False
 
+    def _print_qr_code(self, url):
+        """打印二维码到控制台"""
+        if not qrcode:
+            logger.info("安装 qrcode 库可显示访问二维码: pip install qrcode")
+            return
+
+        try:
+            qr = qrcode.QRCode(border=1)
+            qr.add_data(url)
+            qr.make(fit=True)
+            
+            # 使用简单的ASCII字符打印二维码
+            print("\n")  # 空行
+            qr.print_ascii(invert=True)
+            print("\n")  # 空行
+        except Exception as e:
+            logger.warning(f"生成二维码失败: {e}")
+
+    def _get_local_ips(self):
+        """获取所有局域网IP地址，支持常见网段分类"""
+        ips = []
+        try:
+            # 获取所有网络接口
+            for interface, snics in psutil.net_if_addrs().items():
+                for snic in snics:
+                    if snic.family == socket.AF_INET:
+                        ip = snic.address
+                        # 排除回环地址
+                        if ip != '127.0.0.1':
+                            # 验证是否为常见局域网网段
+                            if self._is_lan_ip(ip):
+                                ips.append(ip)
+        except Exception as e:
+            logger.warning(f"获取本机IP失败: {e}")
+            # 回退方案
+            try:
+                ips.append(socket.gethostbyname(socket.gethostname()))
+            except:
+                pass
+        
+        # 如果没有找到IP，至少返回localhost
+        if not ips:
+            ips.append("127.0.0.1")
+            
+        return list(set(ips))  # 去重
+
+    def _is_lan_ip(self, ip):
+        """验证IP是否为常见局域网网段"""
+        try:
+            # 转换为整数便于比较
+            parts = [int(x) for x in ip.split('.')]
+            if len(parts) != 4:
+                return False
+                
+            # 常见局域网网段
+            # 192.168.x.x
+            if parts[0] == 192 and parts[1] == 168:
+                return True
+            # 10.x.x.x
+            if parts[0] == 10:
+                return True
+            # 172.16-31.x.x
+            if parts[0] == 172 and 16 <= parts[1] <= 31:
+                return True
+            # 169.254.x.x (链路本地地址)
+            if parts[0] == 169 and parts[1] == 254:
+                return True
+            # 100.64-127.x.x (运营商级NAT)
+            if parts[0] == 100 and 64 <= parts[1] <= 127:
+                return True
+                
+            return False
+        except:
+            return False
+
     def start(self):
         """启动服务器"""
         try:
@@ -4467,22 +4567,44 @@ class FileServer:
 
             self.running = True
 
-            logger.info("=== LAN文件服务器启动成功 ===")
-            logger.info(f"本地访问: {protocol}://localhost:{port}")
-            logger.info(f"局域网访问: {protocol}://[本机IP]:{port}")
-            logger.info(
-                f"共享目录: {
-                    self.config_manager.server_config['SHARE_DIRS']}"
-            )
-            logger.info(
-                f"白名单文件类型: {len(self.config_manager.ALL_WHITELIST_EXTENSIONS)} 种"
-            )
-            logger.info(f"使用协议: {protocol.upper()}")
-            logger.info("按 Ctrl+C 停止服务器")
+            # 检查是否有手动指定的IP
+            manual_ip = self.config_manager.server_config.get("MANUAL_IP", "").strip()
+            
+            # 获取本机IP列表
+            if manual_ip:
+                # 使用手动指定的IP
+                local_ips = [manual_ip]
+                logger.info(f"使用手动指定的IP地址: {manual_ip}")
+            else:
+                # 自动检测IP
+                local_ips = self._get_local_ips()
+            
             # 使用章节标题样式展示启动信息
             logger.section("LAN文件服务器启动成功")
-            logger.success(f"本地访问: {protocol}://localhost:{port}")
-            logger.success(f"局域网访问: {protocol}://[本机IP]:{port}")
+            
+            # 打印本地访问地址
+            local_url = f"{protocol}://localhost:{port}"
+            logger.success(f"本地访问: {local_url}")
+            
+            # 打印所有局域网访问地址
+            lan_urls = []
+            if local_ips:
+                logger.info("局域网访问地址:")
+                for ip in local_ips:
+                    lan_url = f"{protocol}://{ip}:{port}"
+                    lan_urls.append(lan_url)
+                    logger.success(f"- {lan_url}")
+            else:
+                logger.warning("未检测到局域网IP，仅支持本地访问")
+
+            # 显示二维码（使用第一个局域网IP）
+            if lan_urls:
+                if qrcode:
+                    logger.info(f"手机扫描下方二维码直接访问 ({lan_urls[0]}):")
+                    self._print_qr_code(lan_urls[0])
+                else:
+                    logger.info("提示: 运行 pip install qrcode 可显示手机访问二维码")
+
             logger.info(
                 f"共享目录: {
                     self.config_manager.server_config['SHARE_DIRS']}"

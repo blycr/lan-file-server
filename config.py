@@ -53,6 +53,7 @@ class ConfigManager:
             "FAILED_AUTH_LIMIT": 5,
             "FAILED_AUTH_BLOCK_TIME": 300,
             "SESSION_TIMEOUT": 24 * 3600,  # 会话超时配置
+            "MANUAL_IP": "",  # 手动指定IP地址，留空则自动检测
         }
 
         # 默认日志配置
